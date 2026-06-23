@@ -84,7 +84,7 @@ async function fetchWaitData() {
   }
 }
 
-async function async function fetchRedditPosts(sub) {
+async function fetchRedditPosts(sub) {
   try {
     const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}`);
     const d = await r.json();
