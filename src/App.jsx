@@ -344,7 +344,7 @@ const fetchAndClassify = useCallback(async () => {
 
   const parkCounts = classified.reduce((a,p) => { a[p.park]=(a[p.park]||0)+1; return a; }, {});
   const busy = loading || classifying;
-  const visiblePosts = classified.filter(p => selectedPark === "All Parks" || p.park === selectedPark);
+  const visiblePosts = classified;
 
   return (
     <div style={{ background: "#f9fafb", minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, color: "#111827" }}>
