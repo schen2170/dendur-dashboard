@@ -76,6 +76,42 @@ async function fetchRedditPosts({ sub, sort }) {
       }));
   } catch { return []; }
 }
+async function classifyParks(posts) {
+  const prompt = `You are classifying Reddit posts by theme park. For each post, identify which specific park it is about.
+
+Park options: ${PARKS.join(", ")}
+
+Rules:
+- Return the EXACT park name from the list above, or null if no specific park is clearly identifiable
+- Base your decision on the full title and body content
+- A post mentioning "Great Adventure" = "Six Flags Great Adventure"
+- A post mentioning "Magic Mountain" or "SFMM" = "Six Flags Magic Mountain"
+- A post mentioning "Cedar Point" or "CP" = "Cedar Point"
+- If the post is about multiple parks or no specific park, return null
+
+Posts:
+${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
+
+Respond ONLY with a JSON array of ${posts.length} objects like: [{"park": "Cedar Point"}, {"park": null}, ...]
+No markdown, no extra text.`;
+
+  try {
+    const res = await fetch(`${REDDIT_API}/claude/classify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 500,
+        messages: [{ role: "user", content: prompt }]
+      }),
+    });
+    const d = await res.json();
+    const text = d?.content?.[0]?.text || "[]";
+    return JSON.parse(text.replace(/```json|```/g, "").trim());
+  } catch {
+    return posts.map(() => ({ park: null }));
+  }
+}
 
 function Sparkline({ data, color }) {
   if (!data?.length) return null;
@@ -215,7 +251,7 @@ export default function App() {
     fetchWaitData().then(d => { setWaitData(d); setWaitLoading(false); });
   }, []);
 
-  const fetchPosts = useCallback(async () => {
+const fetchPosts = useCallback(async () => {
     setLoading(true); setPosts([]);
     const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
     const seen = new Set();
@@ -224,13 +260,21 @@ export default function App() {
       seen.add(p.id);
       return true;
     });
-    setPosts(all);
+    // Classify parks in batches of 10
+    const BATCH = 10, results = [];
+    for (let i = 0; i < all.length; i += BATCH) {
+      const batch = all.slice(i, i + BATCH);
+      const res = await classifyParks(batch);
+      results.push(...res);
+    }
+    const classified = all.map((p, i) => ({
+      ...p,
+      park: results[i]?.park || null,
+    })).filter(p => p.park);
+    setPosts(classified);
     setLoading(false);
   }, []);
-
-  const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p =>
-    p.title.toLowerCase().includes(selectedPark.toLowerCase().split(" ").slice(-1)[0].toLowerCase())
-  );
+const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
 
   return (
     <div style={{ background: "#f9fafb", minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, color: "#111827" }}>
