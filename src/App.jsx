@@ -24,7 +24,14 @@ const KPI_LABELS = {
 
 const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" };
 const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
-const SUBREDDITS   = ["sixflags","rollercoasters","ThemeParkDiscussion"];
+
+const SUBREDDITS = [
+  { sub: "sixflags", sort: "new" },
+  { sub: "sixflags", sort: "hot" },
+  { sub: "rollercoasters", sort: "new" },
+  { sub: "rollercoasters", sort: "hot" },
+  { sub: "ThemeParkDiscussion", sort: "new" },
+];
 
 async function savePostsToDB(posts) {
   try {
@@ -84,9 +91,9 @@ async function fetchWaitData() {
   }
 }
 
-async function fetchRedditPosts(sub) {
+async function fetchRedditPosts({ sub, sort }) {
   try {
-    const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}`);
+    const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}&sort=${sort}`);
     const d = await r.json();
     return (d?.data?.children || []).map(c => ({
       id: c.data.id, title: c.data.title,
@@ -315,7 +322,13 @@ export default function App() {
 
   const fetchAndClassify = useCallback(async () => {
     setLoading(true); setRawCount(0);
-    const all = (await Promise.all(SUBREDDITS.map(fetchRedditPosts))).flat();
+    const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
+    const seen = new Set();
+    const all = allArrays.flat().filter(p => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
     setRawCount(all.length);
     setLoading(false); setClassifying(true);
     const BATCH = 10, results = [];
