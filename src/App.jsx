@@ -109,13 +109,14 @@ async function classifyPosts(posts) {
   const prompt = `You are classifying Reddit posts by theme park for an investment research tool.
 
 For each post extract:
-1. "park": EXACT park name from: ${PARKS.join(", ")}. Return null if none identifiable or if multiple parks mentioned.
-2. "sentiment": "positive", "neutral", or "negative"
+1. "park": EXACT park name from: ${PARKS.join(", ")}. Return null if none identifiable, multiple parks mentioned, or ambiguous.
+2. "sentiment": "positive", "neutral", or "negative" — detect sarcasm carefully
 3. "kpis": array from: wait_times, ride_closures, crowd_levels, staff_issues (empty array if none)
 4. "summary": 1-sentence analyst summary
 5. "kpi_details": object with specific details e.g. {"wait_times": "90 min for Top Thrill"}
 
 Common abbreviations: SFMM=Six Flags Magic Mountain, GA=Great Adventure, CP=Cedar Point, SFGAm=Six Flags Great America, SFOG=Six Flags Over Georgia, SFOT=Six Flags Over Texas
+If a post mentions Cedar Point AND a Six Flags park, return null for park.
 
 Posts:
 ${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
@@ -204,12 +205,13 @@ function WaitCard({ park, data }) {
   );
 }
 
-function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, sortBy, setSortBy }) {
+function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selectedSentiment, setSelectedSentiment, sortBy, setSortBy }) {
   const kpiCounts = Object.keys(KPI_LABELS).reduce((a,k) => { a[k]=posts.filter(p=>(p.kpis||[]).includes(k)).length; return a; }, {});
   const sentCounts = ["positive","neutral","negative"].map(s => ({ s, n: posts.filter(p=>p.sentiment===s).length }));
 
   const filtered = posts
     .filter(p => selectedKPI === "All" || (p.kpis||[]).includes(selectedKPI))
+    .filter(p => selectedSentiment === "All" || p.sentiment === selectedSentiment)
     .sort((a, b) => sortBy === "points"
       ? (b.score||0) - (a.score||0)
       : new Date(b.saved_at || b.created_utc*1000) - new Date(a.saved_at || a.created_utc*1000)
@@ -226,11 +228,14 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, sortBy,
             <div style={{ fontSize: 20, fontWeight: 700, color: kpiCounts[k] ? v.color : "#e5e7eb", marginTop: 2 }}>{kpiCounts[k]||0}</div>
           </div>
         ))}
+        {/* Sentiment card — clickable rows */}
         <div style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: "8px 12px", flex: 1, overflow: "hidden" }}>
           <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 6 }}>Sentiment</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
             {sentCounts.map(({s,n}) => (
-              <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div key={s} onClick={() => setSelectedSentiment(selectedSentiment===s ? "All" : s)}
+                style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "2px 4px", borderRadius: 4,
+                  background: selectedSentiment===s ? SENTIMENT_BG[s] : "transparent" }}>
                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: n ? SENTIMENT[s] : "#e5e7eb", flexShrink: 0 }} />
                 <span style={{ fontSize: 10, color: "#9ca3af", textTransform: "capitalize", width: 42 }}>{s}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: n ? SENTIMENT[s] : "#e5e7eb" }}>{n}</span>
@@ -240,9 +245,9 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, sortBy,
         </div>
       </div>
 
-      {/* Sort controls */}
+      {/* Sort + count bar */}
       <div style={{ display: "flex", gap: 6, marginBottom: "1rem", alignItems: "center" }}>
-        <span style={{ fontSize: 11, color: "#9ca3af" }}>Sort by:</span>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>Sort:</span>
         {[["recent","Most Recent"],["points","Top Points"]].map(([val,label]) => (
           <button key={val} onClick={() => setSortBy(val)}
             style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, border: `1px solid ${sortBy===val ? GREEN : "#f3f4f6"}`,
@@ -337,15 +342,16 @@ function WaitsPanel({ parkFilter, waitData, waitLoading }) {
 }
 
 export default function App() {
-  const [posts, setPosts]               = useState([]);
-  const [waitData, setWaitData]         = useState({});
-  const [waitLoading, setWaitLoading]   = useState(true);
-  const [loading, setLoading]           = useState(false);
-  const [status, setStatus]             = useState("");
-  const [selectedPark, setSelectedPark] = useState("All Parks");
-  const [selectedKPI, setSelectedKPI]   = useState("All");
-  const [sortBy, setSortBy]             = useState("recent");
-  const [activeTab, setActiveTab]       = useState("reddit");
+  const [posts, setPosts]                     = useState([]);
+  const [waitData, setWaitData]               = useState({});
+  const [waitLoading, setWaitLoading]         = useState(true);
+  const [loading, setLoading]                 = useState(false);
+  const [status, setStatus]                   = useState("");
+  const [selectedPark, setSelectedPark]       = useState("All Parks");
+  const [selectedKPI, setSelectedKPI]         = useState("All");
+  const [selectedSentiment, setSelectedSentiment] = useState("All");
+  const [sortBy, setSortBy]                   = useState("recent");
+  const [activeTab, setActiveTab]             = useState("reddit");
 
   useEffect(() => {
     loadStoredPosts().then(p => { if (p.length) setPosts(p); });
@@ -387,9 +393,7 @@ export default function App() {
 
   const parkCounts = posts.reduce((a,p) => { a[p.park]=(a[p.park]||0)+1; return a; }, {});
   const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
-
-  const sfParks = [...PARKS.filter(p => p.startsWith("Six Flags"))]
-    .sort((a,b) => (parkCounts[b]||0) - (parkCounts[a]||0));
+  const sfParks = [...PARKS.filter(p => p.startsWith("Six Flags"))].sort((a,b) => (parkCounts[b]||0)-(parkCounts[a]||0));
   const cpParks = PARKS.filter(p => !p.startsWith("Six Flags"));
 
   return (
@@ -486,6 +490,7 @@ export default function App() {
               <RedditPanel
                 posts={visiblePosts} busy={loading} status={status}
                 selectedKPI={selectedKPI} setSelectedKPI={setSelectedKPI}
+                selectedSentiment={selectedSentiment} setSelectedSentiment={setSelectedSentiment}
                 sortBy={sortBy} setSortBy={setSortBy}
               />
             ) : (
