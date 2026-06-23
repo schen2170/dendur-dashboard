@@ -316,12 +316,13 @@ export default function App() {
       <div style={{ display: "flex", height: "calc(100vh - 57px)" }}>
         <div style={{ width: 210, background: "#fff", borderRight: "1px solid #f3f4f6", padding: "1rem 0.75rem", overflowY: "auto", flexShrink: 0 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 0.5rem", marginBottom: 6 }}>Parks</div>
-          <div onClick={() => setSelectedPark("All Parks")}
-            style={{ padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
+         <div onClick={() => setSelectedPark("All Parks")}
+            style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
               background: selectedPark==="All Parks" ? "#f0fdf4" : "transparent",
               color: selectedPark==="All Parks" ? GREEN : "#374151",
               fontWeight: selectedPark==="All Parks" ? 600 : 400 }}>
-            All Parks
+            <span>All Parks</span>
+            <span style={{ fontSize: 10, color: "#d1d5db" }}>{posts.length}</span>
           </div>
 
           <div style={{ fontSize: 10, fontWeight: 700, color: ORANGE, textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
@@ -329,7 +330,9 @@ export default function App() {
             <span>Six Flags</span>
             <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
           </div>
-          {PARKS.filter(p => p.startsWith("Six Flags")).map(p => {
+         {[...PARKS.filter(p => p.startsWith("Six Flags"))]
+            .sort((a, b) => (parkCounts[b]||0) - (parkCounts[a]||0))
+            .map(p => {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
@@ -338,7 +341,7 @@ export default function App() {
                   color: selectedPark===p ? GREEN : "#374151",
                   fontWeight: selectedPark===p ? 600 : 400 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 145 }}>{p}</span>
-                {count > 0 && <span style={{ fontSize: 10, color: "#d1d5db", flexShrink: 0 }}>{count}</span>}
+                <span style={{ fontSize: 10, color: count > 0 ? "#d1d5db" : "#e5e7eb", flexShrink: 0 }}>{count}</span>
               </div>
             );
           })}
@@ -352,16 +355,16 @@ export default function App() {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
-                style={{ padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
+                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
                   background: selectedPark===p ? "#f0fdf4" : "transparent",
                   color: selectedPark===p ? GREEN : "#374151",
                   fontWeight: selectedPark===p ? 600 : 400 }}>
-                {p}
+                <span>{p}</span>
+                <span style={{ fontSize: 10, color: count > 0 ? "#d1d5db" : "#e5e7eb", flexShrink: 0 }}>{count}</span>
               </div>
             );
           })}
-        </div>
-
+          
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "0.75rem 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{selectedPark}</div>
