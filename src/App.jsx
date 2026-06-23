@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { useState, useEffect, useCallback } from "react";
 
 const PARKS = [
   "Six Flags Magic Mountain","Six Flags Great Adventure","Six Flags Over Georgia",
@@ -133,84 +132,145 @@ function todayLocal() {
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
 
-function toDateStr(d) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-}
-
-function fmtLabel(dateStr, days) {
-  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
-  if (days <= 30) return `${m}/${d}`;
-  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m-1]} '${String(y).slice(2)}`;
-}
-
 function buildChartData(rows, days) {
-  if (!rows.length) return { merged: [], latest: null, delta: null };
+  if (!rows.length) return { current: [], prior: [], latest: null, delta: null };
 
   const today   = todayLocal();
   const cutoff  = new Date(today); cutoff.setDate(cutoff.getDate() - days);
-
-  // prior year: exact same calendar window, shifted back 1 year
   const pyToday  = new Date(today);  pyToday.setFullYear(pyToday.getFullYear() - 1);
   const pyCutoff = new Date(cutoff); pyCutoff.setFullYear(pyCutoff.getFullYear() - 1);
 
-  // current = this year's data in window, keyed by their actual dateStr
-  const currentRows = rows
-    .filter(r => {
-      const d = parseLocalDate(r.date);
-      return d >= cutoff && d <= today && r.avg_wait > 0;
-    })
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const current = rows
+    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait > 0; })
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(r => ({ date: r.date, v: r.avg_wait }));
 
-  // prior = last year's data in same window
-  const priorRows = rows
-    .filter(r => {
-      const d = parseLocalDate(r.date);
-      return d >= pyCutoff && d <= pyToday && r.avg_wait > 0;
-    })
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const prior = rows
+    .filter(r => { const d = parseLocalDate(r.date); return d >= pyCutoff && d <= pyToday && r.avg_wait > 0; })
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(r => ({ date: r.date, v: r.avg_wait }));
 
-  // build merged array keyed by current-year dateStr
-  // prior rows get shifted +1 year so they align on the same x-axis positions
-  const map = {};
-
-  currentRows.forEach(r => {
-    map[r.date] = { date: r.date, label: fmtLabel(r.date, days), current: r.avg_wait };
-  });
-
-  priorRows.forEach(r => {
-    const shifted = parseLocalDate(r.date);
-    shifted.setFullYear(shifted.getFullYear() + 1);
-    const key = toDateStr(shifted);
-    if (!map[key]) map[key] = { date: key, label: fmtLabel(key, days) };
-    map[key].prior = r.avg_wait;
-  });
-
-  // sort by actual date string (YYYY-MM-DD sorts correctly lexicographically)
-  const merged = Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
-
-  const latest      = currentRows.length ? currentRows[currentRows.length - 1].avg_wait : null;
-  const priorLatest = priorRows.length   ? priorRows[priorRows.length - 1].avg_wait     : null;
+  const latest      = current.length ? current[current.length - 1].v : null;
+  const priorLatest = prior.length   ? prior[prior.length - 1].v     : null;
   const delta = (latest && priorLatest)
     ? Math.round(((latest - priorLatest) / priorLatest) * 100)
     : null;
 
-  return { merged, latest, delta };
+  return { current, prior, latest, delta };
+}
+
+function fmtXLabel(dateStr, days) {
+  const [, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  if (days <= 30) return `${m}/${d}`;
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return MONTHS[m - 1];
+}
+
+function MiniChart({ current, prior, days }) {
+  const W = 400, H = 120, PAD = { t: 8, r: 8, b: 24, l: 32 };
+  const cW = W - PAD.l - PAD.r;
+  const cH = H - PAD.t - PAD.b;
+
+  if (!current.length) return (
+    <div style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 12 }}>
+      No data
+    </div>
+  );
+
+  const allVals = [...current.map(p => p.v), ...prior.map(p => p.v)];
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const range = maxV - minV || 1;
+
+  // x positions: spread evenly across the full date window
+  const cutoff = parseLocalDate(current[0].date).getTime();
+  const end    = parseLocalDate(current[current.length - 1].date).getTime();
+  const span   = end - cutoff || 1;
+
+  // for prior, shift dates +1 year to align on same x axis
+  function xOf(dateStr, shiftYear) {
+    const d = parseLocalDate(dateStr);
+    if (shiftYear) d.setFullYear(d.getFullYear() + 1);
+    const t = d.getTime();
+    return PAD.l + ((t - cutoff) / span) * cW;
+  }
+  function yOf(v) {
+    return PAD.t + cH - ((v - minV) / range) * cH;
+  }
+
+  function polyline(pts, color, dash, width) {
+    if (!pts.length) return null;
+    // split into segments — break line on gaps > 8 days
+    const segments = [];
+    let seg = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const gap = parseLocalDate(pts[i].date).getTime() - parseLocalDate(pts[i-1].date).getTime();
+      if (gap > 8 * 86400000) { segments.push(seg); seg = [pts[i]]; }
+      else seg.push(pts[i]);
+    }
+    segments.push(seg);
+
+    return segments.map((s, si) => {
+      const d = s.map((p, i) => {
+        const x = xOf(p.date, color === GREY_PRIOR).toFixed(1);
+        const y = yOf(p.v).toFixed(1);
+        return `${i === 0 ? "M" : "L"}${x},${y}`;
+      }).join(" ");
+      return <path key={si} d={d} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash || undefined} strokeLinecap="round" strokeLinejoin="round" />;
+    });
+  }
+
+  // x-axis labels
+  const labelSet = [];
+  const labelCount = days <= 7 ? current.length : days <= 30 ? 6 : 6;
+  const step = Math.max(1, Math.floor(current.length / labelCount));
+  for (let i = 0; i < current.length; i += step) {
+    const p = current[i];
+    labelSet.push({ x: xOf(p.date, false), label: fmtXLabel(p.date, days) });
+  }
+  // always include last
+  const last = current[current.length - 1];
+  const lastX = xOf(last.date, false);
+  if (!labelSet.find(l => Math.abs(l.x - lastX) < 20)) {
+    labelSet.push({ x: lastX, label: fmtXLabel(last.date, days) });
+  }
+
+  // y-axis ticks
+  const yTicks = [minV, Math.round((minV + maxV) / 2), maxV];
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible" }}>
+      {/* y gridlines + labels */}
+      {yTicks.map((v, i) => (
+        <g key={i}>
+          <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)} stroke="#f3f4f6" strokeWidth="1" />
+          <text x={PAD.l - 4} y={yOf(v) + 4} textAnchor="end" fontSize="9" fill="#9ca3af">{Math.round(v)}</text>
+        </g>
+      ))}
+      {/* prior year dotted grey */}
+      {polyline(prior, GREY_PRIOR, "4,3", 1.5)}
+      {/* current year green */}
+      {polyline(current, GREEN, null, 2)}
+      {/* x labels */}
+      {labelSet.map((l, i) => (
+        <text key={i} x={l.x} y={H - 4} textAnchor="middle" fontSize="9" fill="#9ca3af">{l.label}</text>
+      ))}
+    </svg>
+  );
 }
 
 function WaitChart({ park, allDailyRows }) {
   const [range, setRange] = useState(30);
 
   const rows = allDailyRows.filter(r => r.park === park);
-  const { merged, latest, delta } = buildChartData(rows, range);
+  const { current, prior, latest, delta } = buildChartData(rows, range);
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
   const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
-
-      {/* header row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
           <div style={{ fontSize: 13, color: "#111827", fontWeight: 600, marginBottom: 4 }}>{park}</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -218,97 +278,36 @@ function WaitChart({ park, allDailyRows }) {
               {latest !== null ? latest : "—"}
             </span>
             <span style={{ fontSize: 13, color: "#111827" }}>min avg wait</span>
-            {deltaText && (
-              <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>
-            )}
+            {deltaText && <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>}
           </div>
         </div>
-
-        {/* range toggles */}
         <div style={{ display: "flex", gap: 4 }}>
           {RANGES.map(r => (
-            <button
-              key={r.days}
-              onClick={() => setRange(r.days)}
-              style={{
-                fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                border: range === r.days ? `1px solid ${GREEN}` : "1px solid #f3f4f6",
-                background: range === r.days ? "#f0fdf4" : "#fff",
-                color: range === r.days ? GREEN : "#6b7280",
-                fontWeight: range === r.days ? 600 : 400,
-              }}
-            >
-              {r.label}
-            </button>
+            <button key={r.days} onClick={() => setRange(r.days)} style={{
+              fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+              border: range === r.days ? `1px solid ${GREEN}` : "1px solid #f3f4f6",
+              background: range === r.days ? "#f0fdf4" : "#fff",
+              color: range === r.days ? GREEN : "#6b7280",
+              fontWeight: range === r.days ? 600 : 400,
+            }}>{r.label}</button>
           ))}
         </div>
       </div>
 
-      {/* chart */}
-      {!merged || merged.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "3rem", color: "#9ca3af", fontSize: 12 }}>
-          No data for this window
-        </div>
-      ) : (
-        <>
-          <ResponsiveContainer width="100%" height={180}>
-            <LineChart data={merged} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 10, fill: "#9ca3af" }}
-                tickLine={false}
-                axisLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: "#9ca3af" }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={v => `${v}m`}
-                width={36}
-              />
-              <Tooltip
-                contentStyle={{ border: "1px solid #f3f4f6", borderRadius: 8, fontSize: 12 }}
-                formatter={(val, name) => val !== null ? [`${val} min`, name === "current" ? "This year" : "Prior year"] : [null]}
-                labelStyle={{ color: "#111827", fontWeight: 600 }}
-              />
-              {/* prior year — grey dotted, behind current */}
-              <Line
-                dataKey="prior"
-                name="prior"
-                stroke={GREY_PRIOR}
-                strokeWidth={1.5}
-                strokeDasharray="4 3"
-                dot={false}
-                activeDot={false}
-                connectNulls={false}
-              />
-              {/* current year — green solid */}
-              <Line
-                dataKey="current"
-                name="current"
-                stroke={GREEN}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: GREEN, stroke: "#fff", strokeWidth: 2 }}
-                connectNulls={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+      <MiniChart current={current} prior={prior} days={range} />
 
-          {/* legend */}
-          <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "#9ca3af" }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREEN} strokeWidth="2"/></svg>
-              This year
-            </span>
-            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREY_PRIOR} strokeWidth="1.5" strokeDasharray="4,3"/></svg>
-              Prior year
-            </span>
-          </div>
-        </>
-      )}
+      <div style={{ display: "flex", gap: 16, marginTop: 6, fontSize: 10, color: "#9ca3af" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREEN} strokeWidth="2"/></svg>
+          This year
+        </span>
+        {prior.length > 0 && (
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREY_PRIOR} strokeWidth="1.5" strokeDasharray="4,3"/></svg>
+            Prior year
+          </span>
+        )}
+      </div>
     </div>
   );
 }
