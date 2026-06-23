@@ -274,10 +274,10 @@ function WaitChart({ park, allDailyRows }) {
               <Line
                 dataKey="current"
                 name="current"
-                stroke={accent}
+                stroke={GREEN}
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4, fill: accent, stroke: "#fff", strokeWidth: 2 }}
+                activeDot={{ r: 4, fill: GREEN, stroke: "#fff", strokeWidth: 2 }}
                 connectNulls={false}
               />
             </LineChart>
@@ -286,7 +286,7 @@ function WaitChart({ park, allDailyRows }) {
           {/* legend */}
           <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "#9ca3af" }}>
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={accent} strokeWidth="2"/></svg>
+              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREEN} strokeWidth="2"/></svg>
               This year
             </span>
             <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
