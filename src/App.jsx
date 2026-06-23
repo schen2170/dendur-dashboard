@@ -26,12 +26,11 @@ const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" 
 const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
 
 const SUBREDDITS = [
-  { sub: "sixflags", sort: "new" },
-  { sub: "sixflags", sort: "hot" },
-  { sub: "rollercoasters", sort: "new" },
-  { sub: "rollercoasters", sort: "hot" },
-  { sub: "ThemeParkDiscussion", sort: "new" },
+  { sub: "sixflags", sort: "top" },
+  { sub: "rollercoasters", sort: "top" },
+  { sub: "ThemeParkDiscussion", sort: "top" },
 ];
+
 
 async function fetchWaitData() {
   try {
@@ -66,13 +65,15 @@ async function fetchRedditPosts({ sub, sort }) {
   try {
     const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}&sort=${sort}`);
     const d = await r.json();
-    return (d?.data?.children || []).map(c => ({
-      id: c.data.id, title: c.data.title,
-      body: c.data.selftext?.slice(0, 400) || "",
-      subreddit: c.data.subreddit, score: c.data.score,
-      created: new Date(c.data.created_utc * 1000).toLocaleDateString(),
-      url: `https://reddit.com${c.data.permalink}`,
-    }));
+    return (d?.data?.children || [])
+      .filter(c => c.kind === "t3" && c.data.subreddit === sub && !c.data.stickied)
+      .map(c => ({
+        id: c.data.id, title: c.data.title,
+        body: c.data.selftext?.slice(0, 400) || "",
+        subreddit: c.data.subreddit, score: c.data.score,
+        created: new Date(c.data.created_utc * 1000).toLocaleDateString(),
+        url: `https://reddit.com${c.data.permalink}`,
+      }));
   } catch { return []; }
 }
 
