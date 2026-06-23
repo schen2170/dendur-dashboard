@@ -170,6 +170,7 @@ function MiniChart({ current, prior, days }) {
   const W = 400, H = 120, PAD = { t: 8, r: 8, b: 24, l: 32 };
   const cW = W - PAD.l - PAD.r;
   const cH = H - PAD.t - PAD.b;
+  const [tooltip, setTooltip] = useState(null);
 
   if (!current.length) return (
     <div style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 12 }}>
@@ -182,80 +183,144 @@ function MiniChart({ current, prior, days }) {
   const maxV = Math.max(...allVals);
   const range = maxV - minV || 1;
 
-  // x positions: spread evenly across the full date window
-  const cutoff = parseLocalDate(current[0].date).getTime();
-  const end    = parseLocalDate(current[current.length - 1].date).getTime();
-  const span   = end - cutoff || 1;
+  // x positions based on time within current window
+  const startT = parseLocalDate(current[0].date).getTime();
+  const endT   = parseLocalDate(current[current.length - 1].date).getTime();
+  const span   = endT - startT || 1;
 
-  // for prior, shift dates +1 year to align on same x axis
   function xOf(dateStr, shiftYear) {
     const d = parseLocalDate(dateStr);
     if (shiftYear) d.setFullYear(d.getFullYear() + 1);
-    const t = d.getTime();
-    return PAD.l + ((t - cutoff) / span) * cW;
+    return PAD.l + ((d.getTime() - startT) / span) * cW;
   }
   function yOf(v) {
     return PAD.t + cH - ((v - minV) / range) * cH;
   }
 
-  function polyline(pts, color, dash, width) {
-    if (!pts.length) return null;
-    // split into segments — break line on gaps > 8 days
+  // gap threshold: 14 days for 1W/1M, 60 days for 1Y
+  const gapThreshold = days <= 30 ? 14 * 86400000 : 60 * 86400000;
+
+  function buildPath(pts, shiftYear) {
+    if (!pts.length) return [];
     const segments = [];
     let seg = [pts[0]];
     for (let i = 1; i < pts.length; i++) {
       const gap = parseLocalDate(pts[i].date).getTime() - parseLocalDate(pts[i-1].date).getTime();
-      if (gap > 8 * 86400000) { segments.push(seg); seg = [pts[i]]; }
+      if (gap > gapThreshold) { segments.push(seg); seg = [pts[i]]; }
       else seg.push(pts[i]);
     }
     segments.push(seg);
-
-    return segments.map((s, si) => {
-      const d = s.map((p, i) => {
-        const x = xOf(p.date, color === GREY_PRIOR).toFixed(1);
-        const y = yOf(p.v).toFixed(1);
-        return `${i === 0 ? "M" : "L"}${x},${y}`;
-      }).join(" ");
-      return <path key={si} d={d} fill="none" stroke={color} strokeWidth={width} strokeDasharray={dash || undefined} strokeLinecap="round" strokeLinejoin="round" />;
-    });
+    return segments.map(s =>
+      s.map((p, i) => `${i === 0 ? "M" : "L"}${xOf(p.date, shiftYear).toFixed(1)},${yOf(p.v).toFixed(1)}`).join(" ")
+    );
   }
+
+  const currentPaths = buildPath(current, false);
+  const priorPaths   = buildPath(prior, true);
 
   // x-axis labels
-  const labelSet = [];
-  const labelCount = days <= 7 ? current.length : days <= 30 ? 6 : 6;
+  const labelCount = days <= 7 ? Math.min(current.length, 7) : 6;
   const step = Math.max(1, Math.floor(current.length / labelCount));
+  const labelSet = [];
   for (let i = 0; i < current.length; i += step) {
-    const p = current[i];
-    labelSet.push({ x: xOf(p.date, false), label: fmtXLabel(p.date, days) });
+    labelSet.push({ x: xOf(current[i].date, false), label: fmtXLabel(current[i].date, days) });
   }
-  // always include last
-  const last = current[current.length - 1];
-  const lastX = xOf(last.date, false);
-  if (!labelSet.find(l => Math.abs(l.x - lastX) < 20)) {
-    labelSet.push({ x: lastX, label: fmtXLabel(last.date, days) });
+  const lastP = current[current.length - 1];
+  const lastX = xOf(lastP.date, false);
+  if (!labelSet.find(l => Math.abs(l.x - lastX) < 24)) {
+    labelSet.push({ x: lastX, label: fmtXLabel(lastP.date, days) });
   }
 
-  // y-axis ticks
+  // y ticks
   const yTicks = [minV, Math.round((minV + maxV) / 2), maxV];
 
+  // hover: find nearest current point by x
+  function onMouseMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = ((e.clientX - rect.left) / rect.width) * W;
+    let nearest = null, minDist = Infinity;
+    current.forEach(p => {
+      const px = xOf(p.date, false);
+      const dist = Math.abs(px - mx);
+      if (dist < minDist) { minDist = dist; nearest = p; }
+    });
+    if (nearest && minDist < 20) {
+      const px = xOf(nearest.date, false);
+      // find matching prior point
+      const pd = parseLocalDate(nearest.date);
+      pd.setFullYear(pd.getFullYear() - 1);
+      const pyStr = `${pd.getFullYear()}-${String(pd.getMonth()+1).padStart(2,'0')}-${String(pd.getDate()).padStart(2,'0')}`;
+      const priorPt = prior.find(p => p.date === pyStr) || null;
+      setTooltip({ x: px, date: nearest.date, current: nearest.v, prior: priorPt?.v || null });
+    } else {
+      setTooltip(null);
+    }
+  }
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  function fmtDate(dateStr) {
+    const [y, m, d] = dateStr.slice(0,10).split("-").map(Number);
+    return `${MONTHS[m-1]} ${d}, ${y}`;
+  }
+
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible" }}>
-      {/* y gridlines + labels */}
-      {yTicks.map((v, i) => (
-        <g key={i}>
-          <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)} stroke="#f3f4f6" strokeWidth="1" />
-          <text x={PAD.l - 4} y={yOf(v) + 4} textAnchor="end" fontSize="9" fill="#9ca3af">{Math.round(v)}</text>
-        </g>
-      ))}
-      {/* prior year dotted grey */}
-      {polyline(prior, GREY_PRIOR, "4,3", 1.5)}
-      {/* current year green */}
-      {polyline(current, GREEN, null, 2)}
-      {/* x labels */}
-      {labelSet.map((l, i) => (
-        <text key={i} x={l.x} y={H - 4} textAnchor="middle" fontSize="9" fill="#9ca3af">{l.label}</text>
-      ))}
-    </svg>
+    <div style={{ position: "relative" }}>
+      {tooltip && (
+        <div style={{
+          position: "absolute",
+          left: `${(tooltip.x / W) * 100}%`,
+          top: 0,
+          transform: "translateX(-50%)",
+          background: "#fff",
+          border: "1px solid #f3f4f6",
+          borderRadius: 8,
+          padding: "6px 10px",
+          fontSize: 11,
+          pointerEvents: "none",
+          zIndex: 10,
+          whiteSpace: "nowrap",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+        }}>
+          <div style={{ fontWeight: 600, color: "#111827", marginBottom: 3 }}>{fmtDate(tooltip.date)}</div>
+          <div style={{ color: GREEN }}>This year: {tooltip.current} min</div>
+          {tooltip.prior && <div style={{ color: "#9ca3af" }}>Prior year: {tooltip.prior} min</div>}
+        </div>
+      )}
+      <svg
+        width="100%"
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ overflow: "visible", cursor: "crosshair" }}
+        onMouseMove={onMouseMove}
+        onMouseLeave={() => setTooltip(null)}
+      >
+        {/* y gridlines */}
+        {yTicks.map((v, i) => (
+          <g key={i}>
+            <line x1={PAD.l} y1={yOf(v)} x2={W - PAD.r} y2={yOf(v)} stroke="#f3f4f6" strokeWidth="1" />
+            <text x={PAD.l - 4} y={yOf(v) + 4} textAnchor="end" fontSize="9" fill="#9ca3af">{Math.round(v)}</text>
+          </g>
+        ))}
+        {/* prior year dotted grey */}
+        {priorPaths.map((d, i) => (
+          <path key={i} d={d} fill="none" stroke={GREY_PRIOR} strokeWidth="1.5" strokeDasharray="4,3" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+        {/* current year green */}
+        {currentPaths.map((d, i) => (
+          <path key={i} d={d} fill="none" stroke={GREEN} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+        {/* hover crosshair */}
+        {tooltip && (
+          <>
+            <line x1={tooltip.x} y1={PAD.t} x2={tooltip.x} y2={H - PAD.b} stroke="#e5e7eb" strokeWidth="1" strokeDasharray="3,2" />
+            <circle cx={tooltip.x} cy={yOf(tooltip.current)} r="4" fill={GREEN} stroke="#fff" strokeWidth="2" />
+          </>
+        )}
+        {/* x labels */}
+        {labelSet.map((l, i) => (
+          <text key={i} x={l.x} y={H - 4} textAnchor="middle" fontSize="9" fill="#9ca3af">{l.label}</text>
+        ))}
+      </svg>
+    </div>
   );
 }
 
