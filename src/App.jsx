@@ -29,6 +29,8 @@ const SUBREDDITS = [
   { sub: "sixflags", sort: "top" },
   { sub: "rollercoasters", sort: "top" },
   { sub: "ThemeParkDiscussion", sort: "top" },
+  { sub: "cedarpoint", sort: "top" },
+  { sub: "themeparks", sort: "top" },
 ];
 
 async function savePostsToDB(posts) {
