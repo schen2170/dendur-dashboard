@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 const PARKS = [
   "Six Flags Magic Mountain","Six Flags Great Adventure","Six Flags Over Georgia",
@@ -8,12 +9,12 @@ const PARKS = [
   "Cedar Point",
 ];
 
-const GREEN  = "#00C805";
-const ORANGE = "#f26524";
-const INDIGO = "#6366f1";
-const API    = "https://dendur-waits-api-production.up.railway.app";
+const GREEN      = "#00C805";
+const ORANGE     = "#f26524";
+const INDIGO     = "#6366f1";
+const GREY_PRIOR = "#d1d5db";
+const API        = "https://dendur-waits-api-production.up.railway.app";
 const REDDIT_API = "https://dendur-reddit-api-production.up.railway.app";
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 const KPI_LABELS = {
   wait_times:    { label: "Wait Times", color: "#d97706" },
@@ -26,12 +27,14 @@ const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" 
 const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
 
 const SUBREDDITS = [
-  { sub: "sixflags", sort: "top", pages: 10 },
-  { sub: "rollercoasters", sort: "top", pages: 2 },
-  { sub: "ThemeParkDiscussion", sort: "top", pages: 2 },
-  { sub: "themeparks", sort: "top", pages: 2 },
-  { sub: "cedarpoint", sort: "top", pages: 2 },
+  { sub: "sixflags",            sort: "top", pages: 10 },
+  { sub: "rollercoasters",      sort: "top", pages: 2  },
+  { sub: "ThemeParkDiscussion", sort: "top", pages: 2  },
+  { sub: "themeparks",          sort: "top", pages: 2  },
+  { sub: "cedarpoint",          sort: "top", pages: 2  },
 ];
+
+// ── Data helpers ──────────────────────────────────────────────
 
 async function savePostsToDB(posts) {
   try {
@@ -55,39 +58,7 @@ async function loadStoredPosts() {
       created: new Date(r.saved_at).toLocaleDateString(),
       saved_at: r.saved_at,
     }));
-  } catch (e) {
-    console.error("Failed to load stored posts:", e);
-    return [];
-  }
-}
-
-async function fetchWaitData() {
-  try {
-    const res  = await fetch(`${API}/waits/yoy`);
-    const rows = await res.json();
-    const byPark = {};
-    const thisYear = new Date().getFullYear();
-    for (const r of rows) {
-      if (!byPark[r.park]) byPark[r.park] = {};
-      const mo = parseInt(r.mo) - 1;
-      if (!byPark[r.park][mo]) byPark[r.park][mo] = {};
-      if (parseInt(r.yr) === thisYear) byPark[r.park][mo].current = parseInt(r.avg_wait);
-      else byPark[r.park][mo].prior = parseInt(r.avg_wait);
-    }
-    const shaped = {};
-    for (const [park, months] of Object.entries(byPark)) {
-      const arr = MONTHS.map((month, i) => ({
-        month,
-        current: months[i]?.current ?? null,
-        prior:   months[i]?.prior   ?? null,
-      })).filter(d => d.current !== null || d.prior !== null);
-      if (arr.length) shaped[park] = arr;
-    }
-    return shaped;
-  } catch (e) {
-    console.error("Failed to fetch wait data:", e);
-    return {};
-  }
+  } catch (e) { console.error("Failed to load stored posts:", e); return []; }
 }
 
 async function fetchRedditPosts({ sub, sort }) {
@@ -132,10 +103,10 @@ Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
         max_tokens: 2000,
-        messages: [{ role: "user", content: prompt }]
+        messages: [{ role: "user", content: prompt }],
       }),
     });
-    const d = await res.json();
+    const d    = await res.json();
     const text = d?.content?.[0]?.text || "[]";
     return JSON.parse(text.replace(/```json|```/g, "").trim());
   } catch (e) {
@@ -144,98 +115,220 @@ Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra
   }
 }
 
-function Sparkline({ data, color }) {
-  if (!data?.length) return null;
-  const vals = data.flatMap(d => [d.current, d.prior].filter(v => v !== null));
-  if (!vals.length) return null;
-  const min = Math.min(...vals) - 2, max = Math.max(...vals) + 2, range = max - min || 1;
-  const W = 280, H = 60;
-  const pts = (key, col, dash) => {
-    const valid = data.filter(d => d[key] !== null);
-    if (!valid.length) return null;
-    const points = valid.map(d => {
-      const idx = data.indexOf(d);
-      return `${(idx/(data.length-1))*W},${H-((d[key]-min)/range)*H}`;
-    }).join(" ");
-    return <polyline points={points} fill="none" stroke={col} strokeWidth={dash ? "1.5" : "2"} strokeDasharray={dash ? "4,2" : undefined} />;
-  };
-  return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
-      {pts("prior", "#e5e7eb", true)}
-      {pts("current", color, false)}
-      {data.filter(d => d.current !== null).map((d, i) => (
-        <circle key={i} cx={(data.indexOf(d)/(data.length-1))*W} cy={H-((d.current-min)/range)*H} r="2" fill={color} />
-      ))}
-    </svg>
-  );
+// ── Wait time chart ───────────────────────────────────────────
+
+const RANGES = [
+  { label: "1W",  days: 7   },
+  { label: "1M",  days: 30  },
+  { label: "1Y",  days: 365 },
+];
+
+function buildChartData(rows, days) {
+  if (!rows.length) return { current: [], prior: [], latest: null, delta: null };
+
+  const now      = new Date();
+  const cutoff   = new Date(now); cutoff.setDate(cutoff.getDate() - days);
+  const py_now   = new Date(now); py_now.setFullYear(py_now.getFullYear() - 1);
+  const py_cut   = new Date(cutoff); py_cut.setFullYear(py_cut.getFullYear() - 1);
+
+  // current window
+  const current = rows
+    .filter(r => { const d = new Date(r.date); return d >= cutoff && d <= now && r.avg_wait > 0; })
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map(r => ({
+      date: r.date,
+      label: fmtLabel(r.date, days),
+      value: r.avg_wait,
+    }));
+
+  // prior year same window
+  const prior = rows
+    .filter(r => { const d = new Date(r.date); return d >= py_cut && d <= py_now && r.avg_wait > 0; })
+    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .map(r => {
+      const shifted = new Date(r.date);
+      shifted.setFullYear(shifted.getFullYear() + 1);
+      return { date: shifted.toISOString().slice(0, 10), label: fmtLabel(shifted.toISOString().slice(0, 10), days), value: r.avg_wait };
+    });
+
+  // merge by label for tooltip alignment
+  const labelMap = {};
+  current.forEach(p => { labelMap[p.label] = { label: p.label, current: p.value }; });
+  prior.forEach(p => {
+    if (!labelMap[p.label]) labelMap[p.label] = { label: p.label };
+    labelMap[p.label].prior = p.value;
+  });
+
+  const merged = Object.values(labelMap).sort((a, b) => a.label.localeCompare(b.label));
+
+  const latest      = current.length ? current[current.length - 1].value : null;
+  const priorLatest = prior.length   ? prior[prior.length - 1].value     : null;
+  const delta = (latest && priorLatest)
+    ? Math.round(((latest - priorLatest) / priorLatest) * 100)
+    : null;
+
+  return { merged, latest, delta };
 }
 
-function WaitCard({ park, data }) {
-  const latest = data.filter(d => d.current !== null).slice(-1)[0];
-  const latestPrior = data.filter(d => d.prior !== null).slice(-1)[0];
-  if (!latest) return null;
-  const yoy = latestPrior ? latest.current - latestPrior.prior : null;
-  const isSF = park.startsWith("Six Flags");
-  const avgCurrent = data.filter(d=>d.current!==null).reduce((s,d)=>s+d.current,0)/(data.filter(d=>d.current!==null).length||1);
-  const avgPrior   = data.filter(d=>d.prior!==null).reduce((s,d)=>s+d.prior,0)/(data.filter(d=>d.prior!==null).length||1);
-  const accent = avgCurrent >= avgPrior ? GREEN : ORANGE;
+function fmtLabel(dateStr, days) {
+  const d = new Date(dateStr);
+  if (days <= 7)  return `${d.getMonth()+1}/${d.getDate()}`;
+  if (days <= 30) return `${d.getMonth()+1}/${d.getDate()}`;
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
+}
+
+function WaitChart({ park, allDailyRows }) {
+  const [range, setRange] = useState(30);
+
+  const rows = allDailyRows.filter(r => r.park === park);
+  const { merged, latest, delta } = buildChartData(rows, range);
+
+  const accent = park && !park.startsWith("Six Flags") ? INDIGO : GREEN;
+  const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
+  const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
+
+  const CustomDot = () => null;
+
   return (
-    <div style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 12, padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+    <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+
+      {/* header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <div style={{ fontWeight: 600, fontSize: 13, color: "#111827" }}>{park}</div>
-          <div style={{ fontSize: 11, color: isSF ? ORANGE : INDIGO, marginTop: 2, fontWeight: 500 }}>{isSF ? "Six Flags" : "Cedar Point"}</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
-            {latest.current}<span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 400 }}> min</span>
+          <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 4 }}>Avg Wait · {park}</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
+              {latest !== null ? latest : "—"}
+            </span>
+            <span style={{ fontSize: 13, color: "#9ca3af" }}>min</span>
+            {deltaText && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>
+            )}
           </div>
-          {yoy !== null && (
-            <div style={{ fontSize: 11, marginTop: 3, fontWeight: 600, color: yoy > 0 ? "#dc2626" : GREEN }}>
-              {yoy > 0 ? "▲" : "▼"} {Math.abs(yoy)} min YoY
-            </div>
-          )}
+        </div>
+
+        {/* range toggles */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {RANGES.map(r => (
+            <button
+              key={r.days}
+              onClick={() => setRange(r.days)}
+              style={{
+                fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                border: range === r.days ? `1px solid ${accent}` : "1px solid #f3f4f6",
+                background: range === r.days ? (accent === GREEN ? "#f0fdf4" : accent === INDIGO ? "#eef2ff" : "#fff7f3") : "#fff",
+                color: range === r.days ? accent : "#6b7280",
+                fontWeight: range === r.days ? 600 : 400,
+              }}
+            >
+              {r.label}
+            </button>
+          ))}
         </div>
       </div>
-      <Sparkline data={data} color={accent} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 10, color: "#9ca3af" }}>
-        <span style={{ color: accent }}>— Current</span>
-        <span style={{ color: "#d1d5db" }}>- - Prior Year</span>
-        <span style={{ marginLeft: "auto", color: GREEN, fontWeight: 600 }}>● Live</span>
-      </div>
+
+      {/* chart */}
+      {!merged || merged.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem", color: "#9ca3af", fontSize: 12 }}>
+          No data for this window
+        </div>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={merged} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: "#9ca3af" }}
+                tickLine={false}
+                axisLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "#9ca3af" }}
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={v => `${v}m`}
+                width={36}
+              />
+              <Tooltip
+                contentStyle={{ border: "1px solid #f3f4f6", borderRadius: 8, fontSize: 12 }}
+                formatter={(val, name) => val !== null ? [`${val} min`, name === "current" ? "This year" : "Prior year"] : [null]}
+                labelStyle={{ color: "#111827", fontWeight: 600 }}
+              />
+              {/* prior year — grey dotted, behind current */}
+              <Line
+                dataKey="prior"
+                name="prior"
+                stroke={GREY_PRIOR}
+                strokeWidth={1.5}
+                strokeDasharray="4 3"
+                dot={false}
+                activeDot={false}
+                connectNulls={false}
+              />
+              {/* current year — green solid */}
+              <Line
+                dataKey="current"
+                name="current"
+                stroke={accent}
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4, fill: accent, stroke: "#fff", strokeWidth: 2 }}
+                connectNulls={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+
+          {/* legend */}
+          <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "#9ca3af" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={accent} strokeWidth="2"/></svg>
+              This year
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <svg width="18" height="2"><line x1="0" y1="1" x2="18" y2="1" stroke={GREY_PRIOR} strokeWidth="1.5" strokeDasharray="4,3"/></svg>
+              Prior year
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
+// ── Reddit panel ──────────────────────────────────────────────
+
 function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selectedSentiment, setSelectedSentiment, sortBy, setSortBy, onRefresh }) {
-  const kpiCounts = Object.keys(KPI_LABELS).reduce((a,k) => { a[k]=posts.filter(p=>(p.kpis||[]).includes(k)).length; return a; }, {});
-  const sentCounts = ["positive","neutral","negative"].map(s => ({ s, n: posts.filter(p=>p.sentiment===s).length }));
+  const kpiCounts = Object.keys(KPI_LABELS).reduce((a, k) => {
+    a[k] = posts.filter(p => (p.kpis || []).includes(k)).length;
+    return a;
+  }, {});
+  const sentCounts = ["positive","neutral","negative"].map(s => ({ s, n: posts.filter(p => p.sentiment === s).length }));
 
   const filtered = posts
-    .filter(p => selectedKPI === "All" || (p.kpis||[]).includes(selectedKPI))
+    .filter(p => selectedKPI === "All" || (p.kpis || []).includes(selectedKPI))
     .filter(p => selectedSentiment === "All" || p.sentiment === selectedSentiment)
     .sort((a, b) => sortBy === "points"
-      ? (b.score||0) - (a.score||0)
-      : new Date(b.saved_at || b.created_utc*1000) - new Date(a.saved_at || a.created_utc*1000)
+      ? (b.score || 0) - (a.score || 0)
+      : new Date(b.saved_at || b.created_utc * 1000) - new Date(a.saved_at || a.created_utc * 1000)
     );
 
   return (
     <div>
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-        {Object.entries(KPI_LABELS).map(([k,v]) => (
-          <div key={k} onClick={() => setSelectedKPI(selectedKPI===k ? "All" : k)}
-            style={{ background: selectedKPI===k ? "#f0fdf4" : "#fff", border: `1px solid ${selectedKPI===k ? GREEN : "#f3f4f6"}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", flex: 1, overflow: "hidden" }}>
+        {Object.entries(KPI_LABELS).map(([k, v]) => (
+          <div key={k} onClick={() => setSelectedKPI(selectedKPI === k ? "All" : k)}
+            style={{ background: selectedKPI === k ? "#f0fdf4" : "#fff", border: `1px solid ${selectedKPI === k ? GREEN : "#f3f4f6"}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", flex: 1, overflow: "hidden" }}>
             <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v.label}</div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: kpiCounts[k] ? v.color : "#e5e7eb", marginTop: 2 }}>{kpiCounts[k]||0}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: kpiCounts[k] ? v.color : "#e5e7eb", marginTop: 2 }}>{kpiCounts[k] || 0}</div>
           </div>
         ))}
         <div style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: "8px 12px", flex: 1, overflow: "hidden" }}>
           <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 6 }}>Sentiment</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {sentCounts.map(({s,n}) => (
-              <div key={s} onClick={() => setSelectedSentiment(selectedSentiment===s ? "All" : s)}
-                style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "2px 4px", borderRadius: 4,
-                  background: selectedSentiment===s ? SENTIMENT_BG[s] : "transparent" }}>
+            {sentCounts.map(({ s, n }) => (
+              <div key={s} onClick={() => setSelectedSentiment(selectedSentiment === s ? "All" : s)}
+                style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "2px 4px", borderRadius: 4, background: selectedSentiment === s ? SENTIMENT_BG[s] : "transparent" }}>
                 <div style={{ width: 6, height: 6, borderRadius: "50%", background: n ? SENTIMENT[s] : "#e5e7eb", flexShrink: 0 }} />
                 <span style={{ fontSize: 10, color: "#9ca3af", textTransform: "capitalize", width: 42 }}>{s}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: n ? SENTIMENT[s] : "#e5e7eb" }}>{n}</span>
@@ -247,19 +340,15 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
 
       <div style={{ display: "flex", gap: 6, marginBottom: "1rem", alignItems: "center" }}>
         <span style={{ fontSize: 11, color: "#9ca3af" }}>Sort:</span>
-        {[["recent","Most Recent"],["points","Top Points"]].map(([val,label]) => (
+        {[["recent","Most Recent"],["points","Top Points"]].map(([val, label]) => (
           <button key={val} onClick={() => setSortBy(val)}
-            style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, border: `1px solid ${sortBy===val ? GREEN : "#f3f4f6"}`,
-              background: sortBy===val ? "#f0fdf4" : "#fff", color: sortBy===val ? GREEN : "#6b7280",
-              fontWeight: sortBy===val ? 600 : 400, cursor: "pointer" }}>
+            style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, border: `1px solid ${sortBy === val ? GREEN : "#f3f4f6"}`, background: sortBy === val ? "#f0fdf4" : "#fff", color: sortBy === val ? GREEN : "#6b7280", fontWeight: sortBy === val ? 600 : 400, cursor: "pointer" }}>
             {label}
           </button>
         ))}
         <span style={{ fontSize: 11, color: "#9ca3af" }}>{filtered.length} posts</span>
         <button onClick={onRefresh} disabled={busy}
-          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", marginLeft: "auto",
-            background: busy ? "#f3f4f6" : "#111827", color: busy ? "#9ca3af" : "#fff",
-            fontWeight: 600, cursor: busy ? "not-allowed" : "pointer" }}>
+          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", marginLeft: "auto", background: busy ? "#f3f4f6" : "#111827", color: busy ? "#9ca3af" : "#fff", fontWeight: 600, cursor: busy ? "not-allowed" : "pointer" }}>
           {busy ? status || "Working…" : "Refresh Reddit"}
         </button>
       </div>
@@ -280,28 +369,28 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        {filtered.map((p,i) => (
+        {filtered.map((p, i) => (
           <div key={i} style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "0 1px 2px rgba(0,0,0,0.03)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ flex: 1, marginRight: 12 }}>
                 <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#111827", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>{p.title}</a>
                 <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 3 }}>r/{p.subreddit} · {p.created} · {p.score} pts</div>
                 {p.summary && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.summary}</div>}
-                {!p.summary && p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0,200)}{p.body.length>200?"…":""}</div>}
+                {!p.summary && p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0, 200)}{p.body.length > 200 ? "…" : ""}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
                 <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap" }}>{p.park}</span>
                 {p.sentiment && (
-                  <span style={{ fontSize: 11, background: SENTIMENT_BG[p.sentiment]||"#f9fafb", color: SENTIMENT[p.sentiment]||"#6b7280", padding: "2px 9px", borderRadius: 20, fontWeight: 600, textTransform: "capitalize" }}>{p.sentiment}</span>
+                  <span style={{ fontSize: 11, background: SENTIMENT_BG[p.sentiment] || "#f9fafb", color: SENTIMENT[p.sentiment] || "#6b7280", padding: "2px 9px", borderRadius: 20, fontWeight: 600, textTransform: "capitalize" }}>{p.sentiment}</span>
                 )}
               </div>
             </div>
-            {(p.kpis||[]).length > 0 && (
+            {(p.kpis || []).length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                {(p.kpis||[]).map(k => (
-                  <span key={k} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 20, background: "#f9fafb", border: "1px solid #f3f4f6", color: KPI_LABELS[k]?.color||"#6b7280", fontWeight: 600 }}>{KPI_LABELS[k]?.label||k}</span>
+                {(p.kpis || []).map(k => (
+                  <span key={k} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 20, background: "#f9fafb", border: "1px solid #f3f4f6", color: KPI_LABELS[k]?.color || "#6b7280", fontWeight: 600 }}>{KPI_LABELS[k]?.label || k}</span>
                 ))}
-                {p.kpi_details && Object.values(p.kpi_details).filter(Boolean).map((v,i) => (
+                {p.kpi_details && Object.values(p.kpi_details).filter(Boolean).map((v, i) => (
                   <span key={i} style={{ fontSize: 11, color: "#9ca3af" }}>· {v}</span>
                 ))}
               </div>
@@ -313,51 +402,53 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
   );
 }
 
-function WaitsPanel({ parkFilter, waitData, waitLoading, onRefresh }) {
-  const parks = parkFilter === "All Parks" ? Object.keys(waitData) : [parkFilter].filter(p => waitData[p]);
-  if (waitLoading) return (
+// ── Waits panel ───────────────────────────────────────────────
+
+function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh }) {
+  const parks = parkFilter === "All Parks"
+    ? [...new Set(allDailyRows.map(r => r.park))]
+    : [parkFilter].filter(p => allDailyRows.some(r => r.park === p));
+
+  if (dailyLoading) return (
     <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af" }}>
-      <div style={{ fontSize: 13 }}>Loading live wait time data…</div>
+      <div style={{ fontSize: 13 }}>Loading wait time data…</div>
     </div>
   );
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>Average Wait Times</div>
-          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>12-month rolling · Current vs. Prior Year · Live via Thrill-Data</div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>Wait Time Trends</div>
+          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>Daily avg · Green = this year · Grey dotted = prior year</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {!parks.length && (
-            <span style={{ fontSize: 11, background: "#fffbeb", color: "#d97706", border: "1px solid #fde68a", padding: "4px 10px", borderRadius: 20, fontWeight: 600 }}>
-              No data yet — scrape in progress
-            </span>
-          )}
-          <button onClick={onRefresh} disabled={waitLoading}
-            style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none",
-              background: waitLoading ? "#f3f4f6" : "#111827", color: waitLoading ? "#9ca3af" : "#fff",
-              fontWeight: 600, cursor: waitLoading ? "not-allowed" : "pointer" }}>
-            {waitLoading ? "Refreshing…" : "Refresh Wait Times"}
-          </button>
-        </div>
+        <button onClick={onRefresh} disabled={dailyLoading}
+          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", background: dailyLoading ? "#f3f4f6" : "#111827", color: dailyLoading ? "#9ca3af" : "#fff", fontWeight: 600, cursor: dailyLoading ? "not-allowed" : "pointer" }}>
+          {dailyLoading ? "Loading…" : "Refresh Wait Times"}
+        </button>
       </div>
-      {parks.length ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "0.75rem" }}>
-          {parks.map(p => waitData[p] && <WaitCard key={p} park={p} data={waitData[p]} />)}
+
+      {!parks.length ? (
+        <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af", fontSize: 13 }}>
+          No wait time data yet.
         </div>
       ) : (
-        <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af" }}>
-          Data will appear after the first scrape cycle completes.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))", gap: "0.75rem" }}>
+          {parks.map(p => (
+            <WaitChart key={p} park={p} allDailyRows={allDailyRows} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
+// ── App ───────────────────────────────────────────────────────
+
 export default function App() {
   const [posts, setPosts]                         = useState([]);
-  const [waitData, setWaitData]                   = useState({});
-  const [waitLoading, setWaitLoading]             = useState(true);
+  const [allDailyRows, setAllDailyRows]           = useState([]);
+  const [dailyLoading, setDailyLoading]           = useState(true);
   const [loading, setLoading]                     = useState(false);
   const [status, setStatus]                       = useState("");
   const [selectedPark, setSelectedPark]           = useState("All Parks");
@@ -366,26 +457,26 @@ export default function App() {
   const [sortBy, setSortBy]                       = useState("recent");
   const [activeTab, setActiveTab]                 = useState("reddit");
 
+  // load all daily rows once on mount
   useEffect(() => {
     loadStoredPosts().then(p => { if (p.length) setPosts(p); });
-    fetchWaitData().then(d => { setWaitData(d); setWaitLoading(false); });
+    fetch(`${API}/waits/daily`)
+      .then(r => r.json())
+      .then(rows => { setAllDailyRows(rows); setDailyLoading(false); })
+      .catch(() => setDailyLoading(false));
   }, []);
 
   const fetchPosts = useCallback(async () => {
     setLoading(true); setPosts([]); setStatus("Fetching Reddit posts…");
     const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
     const seen = new Set();
-    const all = allArrays.flat().filter(p => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
+    const all  = allArrays.flat().filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
     setStatus(`Classifying ${all.length} posts with Claude…`);
     const BATCH = 25;
     const batches = [];
     for (let i = 0; i < all.length; i += BATCH) batches.push(all.slice(i, i + BATCH));
     const batchResults = await Promise.all(batches.map(b => classifyPosts(b)));
-    const results = batchResults.flat();
+    const results    = batchResults.flat();
     const classified = all.map((p, i) => ({
       ...p,
       park:        results[i]?.park        || null,
@@ -404,23 +495,27 @@ export default function App() {
   }, []);
 
   const refreshWaitTimes = useCallback(async () => {
-    setWaitLoading(true);
-    const d = await fetchWaitData();
-    setWaitData(d);
-    setWaitLoading(false);
+    setDailyLoading(true);
+    try {
+      const rows = await fetch(`${API}/waits/daily`).then(r => r.json());
+      setAllDailyRows(rows);
+    } catch (e) { console.error(e); }
+    setDailyLoading(false);
   }, []);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([fetchPosts(), refreshWaitTimes()]);
   }, [fetchPosts, refreshWaitTimes]);
 
-  const parkCounts = posts.reduce((a,p) => { a[p.park]=(a[p.park]||0)+1; return a; }, {});
+  const parkCounts = posts.reduce((a, p) => { a[p.park] = (a[p.park] || 0) + 1; return a; }, {});
   const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
-  const sfParks = [...PARKS.filter(p => p.startsWith("Six Flags"))].sort((a,b) => (parkCounts[b]||0)-(parkCounts[a]||0));
+  const sfParks = PARKS.filter(p => p.startsWith("Six Flags")).sort((a, b) => (parkCounts[b] || 0) - (parkCounts[a] || 0));
   const cpParks = PARKS.filter(p => !p.startsWith("Six Flags"));
 
   return (
     <div style={{ background: "#f9fafb", minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, color: "#111827" }}>
+
+      {/* nav */}
       <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: GREEN }} />
@@ -434,22 +529,21 @@ export default function App() {
               {posts.length} posts classified
             </span>
           )}
-          <button onClick={refreshAll} disabled={loading || waitLoading}
-            style={{ background: (loading || waitLoading) ? "#f3f4f6" : "#111827", color: (loading || waitLoading) ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: (loading || waitLoading) ? "not-allowed" : "pointer" }}>
-            {(loading || waitLoading) ? status || "Working…" : "Refresh All"}
+          <button onClick={refreshAll} disabled={loading || dailyLoading}
+            style={{ background: (loading || dailyLoading) ? "#f3f4f6" : "#111827", color: (loading || dailyLoading) ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: (loading || dailyLoading) ? "not-allowed" : "pointer" }}>
+            {(loading || dailyLoading) ? status || "Working…" : "Refresh All"}
           </button>
         </div>
       </div>
 
       <div style={{ display: "flex", height: "calc(100vh - 57px)" }}>
+
+        {/* sidebar */}
         <div style={{ width: 210, background: "#fff", borderRight: "1px solid #f3f4f6", padding: "1rem 0.75rem", overflowY: "auto", flexShrink: 0 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 0.5rem", marginBottom: 6 }}>Parks</div>
 
           <div onClick={() => setSelectedPark("All Parks")}
-            style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
-              background: selectedPark==="All Parks" ? "#f0fdf4" : "transparent",
-              color: selectedPark==="All Parks" ? GREEN : "#374151",
-              fontWeight: selectedPark==="All Parks" ? 600 : 400 }}>
+            style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12, background: selectedPark === "All Parks" ? "#f0fdf4" : "transparent", color: selectedPark === "All Parks" ? GREEN : "#374151", fontWeight: selectedPark === "All Parks" ? 600 : 400 }}>
             <span>All Parks</span>
             <span style={{ fontSize: 10, color: "#d1d5db" }}>{posts.length}</span>
           </div>
@@ -463,10 +557,7 @@ export default function App() {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
-                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
-                  background: selectedPark===p ? "#f0fdf4" : "transparent",
-                  color: selectedPark===p ? GREEN : "#374151",
-                  fontWeight: selectedPark===p ? 600 : 400 }}>
+                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12, background: selectedPark === p ? "#f0fdf4" : "transparent", color: selectedPark === p ? GREEN : "#374151", fontWeight: selectedPark === p ? 600 : 400 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 145 }}>{p}</span>
                 <span style={{ fontSize: 10, color: count > 0 ? "#d1d5db" : "#e5e7eb", flexShrink: 0 }}>{count}</span>
               </div>
@@ -482,10 +573,7 @@ export default function App() {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
-                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
-                  background: selectedPark===p ? "#f0fdf4" : "transparent",
-                  color: selectedPark===p ? GREEN : "#374151",
-                  fontWeight: selectedPark===p ? 600 : 400 }}>
+                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12, background: selectedPark === p ? "#f0fdf4" : "transparent", color: selectedPark === p ? GREEN : "#374151", fontWeight: selectedPark === p ? 600 : 400 }}>
                 <span>{p}</span>
                 <span style={{ fontSize: 10, color: count > 0 ? "#d1d5db" : "#e5e7eb", flexShrink: 0 }}>{count}</span>
               </div>
@@ -493,21 +581,20 @@ export default function App() {
           })}
         </div>
 
+        {/* main */}
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "0.75rem 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{selectedPark}</div>
             <div style={{ display: "flex", gap: 4 }}>
-              {[["reddit","Reddit Data"],["waits","Wait Time Trends"]].map(([t,label]) => (
+              {[["reddit","Reddit Data"],["waits","Wait Time Trends"]].map(([t, label]) => (
                 <button key={t} onClick={() => setActiveTab(t)}
-                  style={{ background: "none", border: "none",
-                    borderBottom: activeTab===t ? `2px solid ${GREEN}` : "2px solid transparent",
-                    color: activeTab===t ? GREEN : "#6b7280", padding: "0.5rem 1rem", fontSize: 12,
-                    fontWeight: activeTab===t ? 600 : 400, cursor: "pointer" }}>
+                  style={{ background: "none", border: "none", borderBottom: activeTab === t ? `2px solid ${GREEN}` : "2px solid transparent", color: activeTab === t ? GREEN : "#6b7280", padding: "0.5rem 1rem", fontSize: 12, fontWeight: activeTab === t ? 600 : 400, cursor: "pointer" }}>
                   {label}
                 </button>
               ))}
             </div>
           </div>
+
           <div style={{ padding: "1.25rem 1.5rem", flex: 1 }}>
             {activeTab === "reddit" ? (
               <RedditPanel
@@ -519,8 +606,10 @@ export default function App() {
               />
             ) : (
               <WaitsPanel
-                parkFilter={selectedPark} waitData={waitData}
-                waitLoading={waitLoading} onRefresh={refreshWaitTimes}
+                parkFilter={selectedPark}
+                allDailyRows={allDailyRows}
+                dailyLoading={dailyLoading}
+                onRefresh={refreshWaitTimes}
               />
             )}
           </div>
