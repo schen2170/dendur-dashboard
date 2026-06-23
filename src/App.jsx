@@ -84,9 +84,9 @@ async function fetchWaitData() {
   }
 }
 
-async function fetchRedditPosts(sub) {
+async function async function fetchRedditPosts(sub) {
   try {
-    const r = await fetch(`https://corsproxy.io/?${encodeURIComponent(`https://www.reddit.com/r/${sub}/new.json?limit=25`)}`);
+    const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}`);
     const d = await r.json();
     return (d?.data?.children || []).map(c => ({
       id: c.data.id, title: c.data.title,
