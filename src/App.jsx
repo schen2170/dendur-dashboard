@@ -183,7 +183,7 @@ function WaitChart({ park, allDailyRows }) {
   const rows = allDailyRows.filter(r => r.park === park);
   const { merged, latest, delta } = buildChartData(rows, range);
 
-  const accent = park && !park.startsWith("Six Flags") ? INDIGO : GREEN;
+  const accent = GREEN;
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
   const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
 
@@ -405,9 +405,10 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
 // ── Waits panel ───────────────────────────────────────────────
 
 function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh }) {
+  const parksWithData = new Set(allDailyRows.map(r => r.park));
   const parks = parkFilter === "All Parks"
-    ? [...new Set(allDailyRows.map(r => r.park))]
-    : [parkFilter].filter(p => allDailyRows.some(r => r.park === p));
+    ? PARKS.filter(p => parksWithData.has(p))
+    : [parkFilter].filter(p => parksWithData.has(p));
 
   if (dailyLoading) return (
     <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af" }}>
@@ -519,7 +520,7 @@ export default function App() {
       <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "0 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", height: 56 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: GREEN }} />
-          <span style={{ fontWeight: 700, fontSize: 14 }}>Dendur Capital Open Assessment</span>
+          <span style={{ fontWeight: 700, fontSize: 14 }}>Dendur Capital Proof of Concept</span>
           <span style={{ color: "#d1d5db" }}>|</span>
           <span style={{ color: "#9ca3af", fontSize: 12 }}>Six Flags & Cedar Point Monitor</span>
         </div>
@@ -548,10 +549,10 @@ export default function App() {
             <span style={{ fontSize: 10, color: "#d1d5db" }}>{posts.length}</span>
           </div>
 
-          <div style={{ fontSize: 10, fontWeight: 700, color: ORANGE, textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
             <span>Six Flags</span>
-            <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
+            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
           </div>
           {sfParks.map(p => {
             const count = parkCounts[p] || 0;
@@ -564,10 +565,10 @@ export default function App() {
             );
           })}
 
-          <div style={{ fontSize: 10, fontWeight: 700, color: INDIGO, textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ flex: 1, height: 1, background: "#e0e7ff" }} />
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
             <span>Cedar Point</span>
-            <div style={{ flex: 1, height: 1, background: "#e0e7ff" }} />
+            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
           </div>
           {cpParks.map(p => {
             const count = parkCounts[p] || 0;
