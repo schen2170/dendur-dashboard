@@ -320,22 +320,20 @@ export default function App() {
     fetchWaitData().then(d => { setWaitData(d); setWaitLoading(false); });
   }, []);
 
-  const fetchAndClassify = useCallback(async () => {
-    setLoading(true); setRawCount(0);
-    const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
-    const seen = new Set();
-    const all = allArrays.flat().filter(p => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
-    setRawCount(all.length);
-    setLoading(false); setClassifying(true);
-    const BATCH = 10, results = [];
-    for (let i = 0; i < all.length; i += BATCH) {
-      const res = await classifyPosts(all.slice(i, i + BATCH));
-      results.push(...res);
-    }
+const fetchAndClassify = useCallback(async () => {
+  setLoading(true); setClassified([]);
+  const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
+  const seen = new Set();
+  const all = allArrays.flat().filter(p => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+  setRawCount(all.length);
+  // Show raw posts immediately, no Claude
+  setClassified(all.map(p => ({ ...p, park: "Unclassified", kpis: [], sentiment: "neutral", summary: "" })));
+  setLoading(false);
+}, []);
     const newPosts = all.map((p,i) => ({ ...p, ...(results[i]||{}) })).filter(p => p.park);
     await savePostsToDB(newPosts);
     const stored = await loadStoredPosts();
