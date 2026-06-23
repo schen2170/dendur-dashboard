@@ -92,7 +92,7 @@ async function fetchWaitData() {
 
 async function fetchRedditPosts({ sub, sort }) {
   try {
-    const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}&sort=${sort}`);
+    const r = await fetch(`${REDDIT_API}/reddit/fetch?sub=${sub}&sort=${sort}&pages=2`);
     const d = await r.json();
     return (d?.data?.children || [])
       .filter(c => c.kind === "t3" && c.data.subreddit === sub && !c.data.stickied)
@@ -207,7 +207,7 @@ function WaitCard({ park, data }) {
   );
 }
 
-function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selectedSentiment, setSelectedSentiment, sortBy, setSortBy }) {
+function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selectedSentiment, setSelectedSentiment, sortBy, setSortBy, onRefresh }) {
   const kpiCounts = Object.keys(KPI_LABELS).reduce((a,k) => { a[k]=posts.filter(p=>(p.kpis||[]).includes(k)).length; return a; }, {});
   const sentCounts = ["positive","neutral","negative"].map(s => ({ s, n: posts.filter(p=>p.sentiment===s).length }));
 
@@ -221,7 +221,6 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
 
   return (
     <div>
-      {/* KPI strip */}
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
         {Object.entries(KPI_LABELS).map(([k,v]) => (
           <div key={k} onClick={() => setSelectedKPI(selectedKPI===k ? "All" : k)}
@@ -230,7 +229,6 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
             <div style={{ fontSize: 20, fontWeight: 700, color: kpiCounts[k] ? v.color : "#e5e7eb", marginTop: 2 }}>{kpiCounts[k]||0}</div>
           </div>
         ))}
-        {/* Sentiment card — clickable rows */}
         <div style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: "8px 12px", flex: 1, overflow: "hidden" }}>
           <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 6 }}>Sentiment</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -247,7 +245,6 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
         </div>
       </div>
 
-      {/* Sort + count bar */}
       <div style={{ display: "flex", gap: 6, marginBottom: "1rem", alignItems: "center" }}>
         <span style={{ fontSize: 11, color: "#9ca3af" }}>Sort:</span>
         {[["recent","Most Recent"],["points","Top Points"]].map(([val,label]) => (
@@ -258,13 +255,19 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
             {label}
           </button>
         ))}
-        <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>{filtered.length} posts</span>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>{filtered.length} posts</span>
+        <button onClick={onRefresh} disabled={busy}
+          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", marginLeft: "auto",
+            background: busy ? "#f3f4f6" : "#111827", color: busy ? "#9ca3af" : "#fff",
+            fontWeight: 600, cursor: busy ? "not-allowed" : "pointer" }}>
+          {busy ? status || "Working…" : "Refresh Reddit"}
+        </button>
       </div>
 
       {!posts.length && !busy && (
         <div style={{ textAlign: "center", padding: "4rem 2rem", color: "#9ca3af" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 6 }}>No data loaded</div>
-          <div style={{ fontSize: 13 }}>Click Refresh Data to pull and classify recent Reddit posts</div>
+          <div style={{ fontSize: 13 }}>Click Refresh Reddit to pull and classify recent posts</div>
         </div>
       )}
       {busy && (
@@ -310,7 +313,7 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
   );
 }
 
-function WaitsPanel({ parkFilter, waitData, waitLoading }) {
+function WaitsPanel({ parkFilter, waitData, waitLoading, onRefresh }) {
   const parks = parkFilter === "All Parks" ? Object.keys(waitData) : [parkFilter].filter(p => waitData[p]);
   if (waitLoading) return (
     <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af" }}>
@@ -324,11 +327,19 @@ function WaitsPanel({ parkFilter, waitData, waitLoading }) {
           <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>Average Wait Times</div>
           <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>12-month rolling · Current vs. Prior Year · Live via Thrill-Data</div>
         </div>
-        {!parks.length && (
-          <span style={{ fontSize: 11, background: "#fffbeb", color: "#d97706", border: "1px solid #fde68a", padding: "4px 10px", borderRadius: 20, fontWeight: 600 }}>
-            No data yet — scrape in progress
-          </span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {!parks.length && (
+            <span style={{ fontSize: 11, background: "#fffbeb", color: "#d97706", border: "1px solid #fde68a", padding: "4px 10px", borderRadius: 20, fontWeight: 600 }}>
+              No data yet — scrape in progress
+            </span>
+          )}
+          <button onClick={onRefresh} disabled={waitLoading}
+            style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none",
+              background: waitLoading ? "#f3f4f6" : "#111827", color: waitLoading ? "#9ca3af" : "#fff",
+              fontWeight: 600, cursor: waitLoading ? "not-allowed" : "pointer" }}>
+            {waitLoading ? "Refreshing…" : "Refresh Wait Times"}
+          </button>
+        </div>
       </div>
       {parks.length ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: "0.75rem" }}>
@@ -344,16 +355,16 @@ function WaitsPanel({ parkFilter, waitData, waitLoading }) {
 }
 
 export default function App() {
-  const [posts, setPosts]                     = useState([]);
-  const [waitData, setWaitData]               = useState({});
-  const [waitLoading, setWaitLoading]         = useState(true);
-  const [loading, setLoading]                 = useState(false);
-  const [status, setStatus]                   = useState("");
-  const [selectedPark, setSelectedPark]       = useState("All Parks");
-  const [selectedKPI, setSelectedKPI]         = useState("All");
+  const [posts, setPosts]                         = useState([]);
+  const [waitData, setWaitData]                   = useState({});
+  const [waitLoading, setWaitLoading]             = useState(true);
+  const [loading, setLoading]                     = useState(false);
+  const [status, setStatus]                       = useState("");
+  const [selectedPark, setSelectedPark]           = useState("All Parks");
+  const [selectedKPI, setSelectedKPI]             = useState("All");
   const [selectedSentiment, setSelectedSentiment] = useState("All");
-  const [sortBy, setSortBy]                   = useState("recent");
-  const [activeTab, setActiveTab]             = useState("reddit");
+  const [sortBy, setSortBy]                       = useState("recent");
+  const [activeTab, setActiveTab]                 = useState("reddit");
 
   useEffect(() => {
     loadStoredPosts().then(p => { if (p.length) setPosts(p); });
@@ -370,12 +381,11 @@ export default function App() {
       return true;
     });
     setStatus(`Classifying ${all.length} posts with Claude…`);
-    const BATCH = 25, results = [];
-    for (let i = 0; i < all.length; i += BATCH) {
-      const res = await classifyPosts(all.slice(i, i + BATCH));
-      results.push(...res);
-      setStatus(`Classifying… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
-    }
+    const BATCH = 25;
+    const batches = [];
+    for (let i = 0; i < all.length; i += BATCH) batches.push(all.slice(i, i + BATCH));
+    const batchResults = await Promise.all(batches.map(b => classifyPosts(b)));
+    const results = batchResults.flat();
     const classified = all.map((p, i) => ({
       ...p,
       park:        results[i]?.park        || null,
@@ -392,6 +402,17 @@ export default function App() {
     setStatus(`Done — ${classified.length} park-specific posts found`);
     setLoading(false);
   }, []);
+
+  const refreshWaitTimes = useCallback(async () => {
+    setWaitLoading(true);
+    const d = await fetchWaitData();
+    setWaitData(d);
+    setWaitLoading(false);
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([fetchPosts(), refreshWaitTimes()]);
+  }, [fetchPosts, refreshWaitTimes]);
 
   const parkCounts = posts.reduce((a,p) => { a[p.park]=(a[p.park]||0)+1; return a; }, {});
   const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
@@ -413,9 +434,9 @@ export default function App() {
               {posts.length} posts classified
             </span>
           )}
-          <button onClick={fetchPosts} disabled={loading}
-            style={{ background: loading ? "#f3f4f6" : "#111827", color: loading ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer" }}>
-            {loading ? status || "Working…" : "Refresh Data"}
+          <button onClick={refreshAll} disabled={loading || waitLoading}
+            style={{ background: (loading || waitLoading) ? "#f3f4f6" : "#111827", color: (loading || waitLoading) ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: (loading || waitLoading) ? "not-allowed" : "pointer" }}>
+            {(loading || waitLoading) ? status || "Working…" : "Refresh All"}
           </button>
         </div>
       </div>
@@ -494,9 +515,13 @@ export default function App() {
                 selectedKPI={selectedKPI} setSelectedKPI={setSelectedKPI}
                 selectedSentiment={selectedSentiment} setSelectedSentiment={setSelectedSentiment}
                 sortBy={sortBy} setSortBy={setSortBy}
+                onRefresh={fetchPosts}
               />
             ) : (
-              <WaitsPanel parkFilter={selectedPark} waitData={waitData} waitLoading={waitLoading} />
+              <WaitsPanel
+                parkFilter={selectedPark} waitData={waitData}
+                waitLoading={waitLoading} onRefresh={refreshWaitTimes}
+              />
             )}
           </div>
         </div>
