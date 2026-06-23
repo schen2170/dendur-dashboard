@@ -131,7 +131,7 @@ Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 1000,
+        max_tokens: 2000,
         messages: [{ role: "user", content: prompt }]
       }),
     });
@@ -370,7 +370,7 @@ export default function App() {
       return true;
     });
     setStatus(`Classifying ${all.length} posts with Claude…`);
-    const BATCH = 10, results = [];
+    const BATCH = 25, results = [];
     for (let i = 0; i < all.length; i += BATCH) {
       const res = await classifyPosts(all.slice(i, i + BATCH));
       results.push(...res);
