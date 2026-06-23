@@ -15,11 +15,49 @@ const API    = "https://dendur-waits-api-production.up.railway.app";
 const REDDIT_API = "https://dendur-reddit-api-production.up.railway.app";
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+const KPI_LABELS = {
+  wait_times:    { label: "Wait Times", color: "#d97706" },
+  ride_closures: { label: "Closures",   color: "#dc2626" },
+  crowd_levels:  { label: "Crowds",     color: "#7c3aed" },
+  staff_issues:  { label: "Staff",      color: "#db2777" },
+};
+
+const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" };
+const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
+
 const SUBREDDITS = [
   { sub: "sixflags", sort: "top" },
   { sub: "rollercoasters", sort: "top" },
   { sub: "ThemeParkDiscussion", sort: "top" },
 ];
+
+async function savePostsToDB(posts) {
+  try {
+    await fetch(`${REDDIT_API}/reddit/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ posts }),
+    });
+  } catch (e) { console.error("Failed to save posts:", e); }
+}
+
+async function loadStoredPosts() {
+  try {
+    const res  = await fetch(`${REDDIT_API}/reddit/posts?days=30`);
+    const rows = await res.json();
+    return rows.map(r => ({
+      id: r.post_id, title: r.title, body: r.body,
+      subreddit: r.subreddit, score: r.score, url: r.url,
+      park: r.park, sentiment: r.sentiment, summary: r.summary,
+      kpis: r.kpis || [], kpi_details: r.kpi_details || {},
+      created: new Date(r.saved_at).toLocaleDateString(),
+      saved_at: r.saved_at,
+    }));
+  } catch (e) {
+    console.error("Failed to load stored posts:", e);
+    return [];
+  }
+}
 
 async function fetchWaitData() {
   try {
@@ -61,29 +99,28 @@ async function fetchRedditPosts({ sub, sort }) {
         body: c.data.selftext?.slice(0, 400) || "",
         subreddit: c.data.subreddit, score: c.data.score,
         created: new Date(c.data.created_utc * 1000).toLocaleDateString(),
+        created_utc: c.data.created_utc,
         url: `https://reddit.com${c.data.permalink}`,
       }));
   } catch { return []; }
 }
 
-async function classifyParks(posts) {
+async function classifyPosts(posts) {
   const prompt = `You are classifying Reddit posts by theme park for an investment research tool.
 
-For each post, identify which specific park it is about.
-Park options: ${PARKS.join(", ")}
+For each post extract:
+1. "park": EXACT park name from: ${PARKS.join(", ")}. Return null if none identifiable or if multiple parks mentioned.
+2. "sentiment": "positive", "neutral", or "negative"
+3. "kpis": array from: wait_times, ride_closures, crowd_levels, staff_issues (empty array if none)
+4. "summary": 1-sentence analyst summary
+5. "kpi_details": object with specific details e.g. {"wait_times": "90 min for Top Thrill"}
 
-Rules:
-- Return the EXACT park name from the list, or null if no specific park is clearly identifiable
-- Use full title and body to decide
-- Common abbreviations: SFMM = Six Flags Magic Mountain, GA = Great Adventure, CP = Cedar Point, SFGAm = Six Flags Great America, SFOG = Six Flags Over Georgia, SFOT = Six Flags Over Texas
-- If post covers multiple parks or is general, return null
-- If a post mentions Cedar Point AND a Six Flags park, return null
+Common abbreviations: SFMM=Six Flags Magic Mountain, GA=Great Adventure, CP=Cedar Point, SFGAm=Six Flags Great America, SFOG=Six Flags Over Georgia, SFOT=Six Flags Over Texas
 
 Posts:
 ${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
 
-Respond ONLY with a JSON array of ${posts.length} objects like: [{"park": "Cedar Point"}, {"park": null}]
-No markdown, no extra text.`;
+Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra text.`;
 
   try {
     const res = await fetch(`${REDDIT_API}/claude/classify`, {
@@ -91,7 +128,7 @@ No markdown, no extra text.`;
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 500,
+        max_tokens: 1000,
         messages: [{ role: "user", content: prompt }]
       }),
     });
@@ -167,9 +204,56 @@ function WaitCard({ park, data }) {
   );
 }
 
-function RedditPanel({ posts, busy, status }) {
+function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, sortBy, setSortBy }) {
+  const kpiCounts = Object.keys(KPI_LABELS).reduce((a,k) => { a[k]=posts.filter(p=>(p.kpis||[]).includes(k)).length; return a; }, {});
+  const sentCounts = ["positive","neutral","negative"].map(s => ({ s, n: posts.filter(p=>p.sentiment===s).length }));
+
+  const filtered = posts
+    .filter(p => selectedKPI === "All" || (p.kpis||[]).includes(selectedKPI))
+    .sort((a, b) => sortBy === "points"
+      ? (b.score||0) - (a.score||0)
+      : new Date(b.saved_at || b.created_utc*1000) - new Date(a.saved_at || a.created_utc*1000)
+    );
+
   return (
     <div>
+      {/* KPI strip */}
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+        {Object.entries(KPI_LABELS).map(([k,v]) => (
+          <div key={k} onClick={() => setSelectedKPI(selectedKPI===k ? "All" : k)}
+            style={{ background: selectedKPI===k ? "#f0fdf4" : "#fff", border: `1px solid ${selectedKPI===k ? GREEN : "#f3f4f6"}`, borderRadius: 8, padding: "8px 12px", cursor: "pointer", flex: 1, overflow: "hidden" }}>
+            <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: kpiCounts[k] ? v.color : "#e5e7eb", marginTop: 2 }}>{kpiCounts[k]||0}</div>
+          </div>
+        ))}
+        <div style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: "8px 12px", flex: 1, overflow: "hidden" }}>
+          <div style={{ fontSize: 10, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 6 }}>Sentiment</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {sentCounts.map(({s,n}) => (
+              <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: n ? SENTIMENT[s] : "#e5e7eb", flexShrink: 0 }} />
+                <span style={{ fontSize: 10, color: "#9ca3af", textTransform: "capitalize", width: 42 }}>{s}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: n ? SENTIMENT[s] : "#e5e7eb" }}>{n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Sort controls */}
+      <div style={{ display: "flex", gap: 6, marginBottom: "1rem", alignItems: "center" }}>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>Sort by:</span>
+        {[["recent","Most Recent"],["points","Top Points"]].map(([val,label]) => (
+          <button key={val} onClick={() => setSortBy(val)}
+            style={{ fontSize: 11, padding: "4px 10px", borderRadius: 20, border: `1px solid ${sortBy===val ? GREEN : "#f3f4f6"}`,
+              background: sortBy===val ? "#f0fdf4" : "#fff", color: sortBy===val ? GREEN : "#6b7280",
+              fontWeight: sortBy===val ? 600 : 400, cursor: "pointer" }}>
+            {label}
+          </button>
+        ))}
+        <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>{filtered.length} posts</span>
+      </div>
+
       {!posts.length && !busy && (
         <div style={{ textAlign: "center", padding: "4rem 2rem", color: "#9ca3af" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 6 }}>No data loaded</div>
@@ -184,19 +268,34 @@ function RedditPanel({ posts, busy, status }) {
           </div>
         </div>
       )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        {posts.map((p, i) => (
+        {filtered.map((p,i) => (
           <div key={i} style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "0 1px 2px rgba(0,0,0,0.03)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ flex: 1, marginRight: 12 }}>
                 <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#111827", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>{p.title}</a>
                 <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 3 }}>r/{p.subreddit} · {p.created} · {p.score} pts</div>
-                {p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0, 200)}{p.body.length > 200 ? "…" : ""}</div>}
+                {p.summary && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.summary}</div>}
+                {!p.summary && p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0,200)}{p.body.length>200?"…":""}</div>}
               </div>
-              {p.park && (
-                <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{p.park}</span>
-              )}
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
+                <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap" }}>{p.park}</span>
+                {p.sentiment && (
+                  <span style={{ fontSize: 11, background: SENTIMENT_BG[p.sentiment]||"#f9fafb", color: SENTIMENT[p.sentiment]||"#6b7280", padding: "2px 9px", borderRadius: 20, fontWeight: 600, textTransform: "capitalize" }}>{p.sentiment}</span>
+                )}
+              </div>
             </div>
+            {(p.kpis||[]).length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                {(p.kpis||[]).map(k => (
+                  <span key={k} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 20, background: "#f9fafb", border: "1px solid #f3f4f6", color: KPI_LABELS[k]?.color||"#6b7280", fontWeight: 600 }}>{KPI_LABELS[k]?.label||k}</span>
+                ))}
+                {p.kpi_details && Object.values(p.kpi_details).filter(Boolean).map((v,i) => (
+                  <span key={i} style={{ fontSize: 11, color: "#9ca3af" }}>· {v}</span>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -244,9 +343,12 @@ export default function App() {
   const [loading, setLoading]           = useState(false);
   const [status, setStatus]             = useState("");
   const [selectedPark, setSelectedPark] = useState("All Parks");
+  const [selectedKPI, setSelectedKPI]   = useState("All");
+  const [sortBy, setSortBy]             = useState("recent");
   const [activeTab, setActiveTab]       = useState("reddit");
 
   useEffect(() => {
+    loadStoredPosts().then(p => { if (p.length) setPosts(p); });
     fetchWaitData().then(d => { setWaitData(d); setWaitLoading(false); });
   }, []);
 
@@ -262,24 +364,32 @@ export default function App() {
     setStatus(`Classifying ${all.length} posts with Claude…`);
     const BATCH = 10, results = [];
     for (let i = 0; i < all.length; i += BATCH) {
-      const res = await classifyParks(all.slice(i, i + BATCH));
+      const res = await classifyPosts(all.slice(i, i + BATCH));
       results.push(...res);
       setStatus(`Classifying… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
     }
     const classified = all.map((p, i) => ({
       ...p,
-      park: results[i]?.park || null,
+      park:        results[i]?.park        || null,
+      sentiment:   results[i]?.sentiment   || "neutral",
+      kpis:        results[i]?.kpis        || [],
+      kpi_details: results[i]?.kpi_details || {},
+      summary:     results[i]?.summary     || "",
+      saved_at:    new Date().toISOString(),
     })).filter(p => p.park);
+    setStatus(`Saving ${classified.length} posts…`);
+    await savePostsToDB(classified);
+    const stored = await loadStoredPosts();
+    setPosts(stored.length ? stored : classified);
     setStatus(`Done — ${classified.length} park-specific posts found`);
-    setPosts(classified);
     setLoading(false);
   }, []);
 
-  const parkCounts = posts.reduce((a, p) => { a[p.park] = (a[p.park]||0)+1; return a; }, {});
+  const parkCounts = posts.reduce((a,p) => { a[p.park]=(a[p.park]||0)+1; return a; }, {});
   const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
 
   const sfParks = [...PARKS.filter(p => p.startsWith("Six Flags"))]
-    .sort((a, b) => (parkCounts[b]||0) - (parkCounts[a]||0));
+    .sort((a,b) => (parkCounts[b]||0) - (parkCounts[a]||0));
   const cpParks = PARKS.filter(p => !p.startsWith("Six Flags"));
 
   return (
@@ -373,7 +483,11 @@ export default function App() {
           </div>
           <div style={{ padding: "1.25rem 1.5rem", flex: 1 }}>
             {activeTab === "reddit" ? (
-              <RedditPanel posts={visiblePosts} busy={loading} status={status} />
+              <RedditPanel
+                posts={visiblePosts} busy={loading} status={status}
+                selectedKPI={selectedKPI} setSelectedKPI={setSelectedKPI}
+                sortBy={sortBy} setSortBy={setSortBy}
+              />
             ) : (
               <WaitsPanel parkFilter={selectedPark} waitData={waitData} waitLoading={waitLoading} />
             )}
