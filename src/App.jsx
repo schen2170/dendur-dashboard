@@ -112,7 +112,7 @@ ${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
 
 Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra text.`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(`${REDDIT_API}/claude/classify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content: prompt }] }),
