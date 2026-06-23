@@ -188,8 +188,8 @@ function MiniChart({ current, prior, days }) {
   const allVals = hasData
     ? [...current.map(p => p.v), ...prior.map(p => p.v)]
     : [0, 10];
-  const minV = Math.min(...allVals);
-  const maxV = Math.max(...allVals);
+  const minV = Math.max(0, Math.min(...allVals) - 2);
+  const maxV = Math.max(...allVals) + 5;
   const range = maxV - minV || 1;
 
   // x window is always the requested time window, not just where data exists
