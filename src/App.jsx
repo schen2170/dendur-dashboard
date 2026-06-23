@@ -151,7 +151,18 @@ function buildChartData(rows, days) {
     .map(r => ({ date: r.date, v: r.avg_wait }));
 
   const latest      = current.length ? current[current.length - 1].v : null;
-  const priorLatest = prior.length   ? prior[prior.length - 1].v     : null;
+  const latestDate  = current.length ? current[current.length - 1].date : null;
+
+  // only compare if prior year has a reading within 3 days of the same date
+  let priorLatest = null;
+  if (latestDate) {
+    const targetT = parseLocalDate(latestDate);
+    targetT.setFullYear(targetT.getFullYear() - 1);
+    const target = targetT.getTime();
+    const close = prior.find(p => Math.abs(parseLocalDate(p.date).getTime() - target) <= 3 * 86400000);
+    if (close) priorLatest = close.v;
+  }
+
   const delta = (latest && priorLatest)
     ? Math.round(((latest - priorLatest) / priorLatest) * 100)
     : null;
@@ -172,42 +183,54 @@ function MiniChart({ current, prior, days }) {
   const cH = H - PAD.t - PAD.b;
   const [tooltip, setTooltip] = useState(null);
 
-  if (!current.length) return (
-    <div style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 12 }}>
-      No data
-    </div>
-  );
+  // always render frame even with no data
+  const hasData = current.length > 0;
 
-  const allVals = [...current.map(p => p.v), ...prior.map(p => p.v)];
+  const allVals = hasData
+    ? [...current.map(p => p.v), ...prior.map(p => p.v)]
+    : [0, 10];
   const minV = Math.min(...allVals);
   const maxV = Math.max(...allVals);
   const range = maxV - minV || 1;
 
-  // x positions based on time within current window
-  const startT = parseLocalDate(current[0].date).getTime();
-  const endT   = parseLocalDate(current[current.length - 1].date).getTime();
+  // x window is always the requested time window, not just where data exists
+  const today = todayLocal();
+  const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - days);
+  const startT = cutoff.getTime();
+  const endT   = today.getTime();
   const span   = endT - startT || 1;
 
   function xOf(dateStr, shiftYear) {
     const d = parseLocalDate(dateStr);
     if (shiftYear) d.setFullYear(d.getFullYear() + 1);
-    return PAD.l + ((d.getTime() - startT) / span) * cW;
+    // clamp to window
+    const t = Math.min(Math.max(d.getTime(), startT), endT);
+    return PAD.l + ((t - startT) / span) * cW;
   }
   function yOf(v) {
     return PAD.t + cH - ((v - minV) / range) * cH;
   }
 
-  // gap threshold: 14 days for 1W/1M, 60 days for 1Y
   const gapThreshold = days <= 30 ? 14 * 86400000 : 60 * 86400000;
 
   function buildPath(pts, shiftYear) {
     if (!pts.length) return [];
+    // filter prior so it doesn't extend past today
+    const filtered = shiftYear
+      ? pts.filter(p => {
+          const d = parseLocalDate(p.date);
+          d.setFullYear(d.getFullYear() + 1);
+          return d.getTime() <= endT;
+        })
+      : pts;
+    if (!filtered.length) return [];
+
     const segments = [];
-    let seg = [pts[0]];
-    for (let i = 1; i < pts.length; i++) {
-      const gap = parseLocalDate(pts[i].date).getTime() - parseLocalDate(pts[i-1].date).getTime();
-      if (gap > gapThreshold) { segments.push(seg); seg = [pts[i]]; }
-      else seg.push(pts[i]);
+    let seg = [filtered[0]];
+    for (let i = 1; i < filtered.length; i++) {
+      const gap = parseLocalDate(filtered[i].date).getTime() - parseLocalDate(filtered[i-1].date).getTime();
+      if (gap > gapThreshold) { segments.push(seg); seg = [filtered[i]]; }
+      else seg.push(filtered[i]);
     }
     segments.push(seg);
     return segments.map(s =>
@@ -218,24 +241,21 @@ function MiniChart({ current, prior, days }) {
   const currentPaths = buildPath(current, false);
   const priorPaths   = buildPath(prior, true);
 
-  // x-axis labels
-  const labelCount = days <= 7 ? Math.min(current.length, 7) : 6;
-  const step = Math.max(1, Math.floor(current.length / labelCount));
+  // x-axis labels: evenly spaced across the full window
+  const labelCount = 6;
   const labelSet = [];
-  for (let i = 0; i < current.length; i += step) {
-    labelSet.push({ x: xOf(current[i].date, false), label: fmtXLabel(current[i].date, days) });
-  }
-  const lastP = current[current.length - 1];
-  const lastX = xOf(lastP.date, false);
-  if (!labelSet.find(l => Math.abs(l.x - lastX) < 24)) {
-    labelSet.push({ x: lastX, label: fmtXLabel(lastP.date, days) });
+  for (let i = 0; i <= labelCount; i++) {
+    const t = startT + (span * i / labelCount);
+    const d = new Date(t);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const x = PAD.l + (i / labelCount) * cW;
+    labelSet.push({ x, label: fmtXLabel(dateStr, days) });
   }
 
-  // y ticks
   const yTicks = [minV, Math.round((minV + maxV) / 2), maxV];
 
-  // hover: find nearest current point by x
   function onMouseMove(e) {
+    if (!hasData) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const mx = ((e.clientX - rect.left) / rect.width) * W;
     let nearest = null, minDist = Infinity;
@@ -246,7 +266,6 @@ function MiniChart({ current, prior, days }) {
     });
     if (nearest && minDist < 20) {
       const px = xOf(nearest.date, false);
-      // find matching prior point
       const pd = parseLocalDate(nearest.date);
       pd.setFullYear(pd.getFullYear() - 1);
       const pyStr = `${pd.getFullYear()}-${String(pd.getMonth()+1).padStart(2,'0')}-${String(pd.getDate()).padStart(2,'0')}`;
@@ -289,7 +308,7 @@ function MiniChart({ current, prior, days }) {
       <svg
         width="100%"
         viewBox={`0 0 ${W} ${H}`}
-        style={{ overflow: "visible", cursor: "crosshair" }}
+        style={{ overflow: "visible", cursor: hasData ? "crosshair" : "default" }}
         onMouseMove={onMouseMove}
         onMouseLeave={() => setTooltip(null)}
       >
@@ -319,6 +338,9 @@ function MiniChart({ current, prior, days }) {
         {labelSet.map((l, i) => (
           <text key={i} x={l.x} y={H - 4} textAnchor="middle" fontSize="9" fill="#9ca3af">{l.label}</text>
         ))}
+        {!hasData && (
+          <text x={W/2} y={H/2} textAnchor="middle" fontSize="11" fill="#d1d5db">No data for this period</text>
+        )}
       </svg>
     </div>
   );
@@ -331,7 +353,7 @@ function WaitChart({ park, allDailyRows }) {
   const { current, prior, latest, delta } = buildChartData(rows, range);
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
-  const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
+  const deltaText  = latest === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
