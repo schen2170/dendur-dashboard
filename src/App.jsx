@@ -27,9 +27,9 @@ const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2
 
 const SUBREDDITS = [
   { sub: "sixflags", sort: "top", pages: 10 },
-  { sub: "rollercoasters", sort: "top", pages: 3 },
-  { sub: "ThemeParkDiscussion", sort: "top", pages: 3 },
-  { sub: "themeparks", sort: "top", pages: 3 },
+  { sub: "rollercoasters", sort: "top", pages: 2 },
+  { sub: "ThemeParkDiscussion", sort: "top", pages: 2 },
+  { sub: "themeparks", sort: "top", pages: 2 },
   { sub: "cedarpoint", sort: "top", pages: 2 },
 ];
 
