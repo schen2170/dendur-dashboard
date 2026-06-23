@@ -123,7 +123,6 @@ const RANGES = [
   { label: "1Y",  days: 365 },
 ];
 
-// parse date string as local date (not UTC) to avoid off-by-one
 function parseLocalDate(dateStr) {
   const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
   return new Date(y, m - 1, d);
@@ -134,54 +133,68 @@ function todayLocal() {
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
 
-function buildChartData(rows, days) {
-  if (!rows.length) return { merged: [], latest: null, delta: null };
-
-  const today  = todayLocal();
-  const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - days);
-  const py_today  = new Date(today);  py_today.setFullYear(py_today.getFullYear() - 1);
-  const py_cutoff = new Date(cutoff); py_cutoff.setFullYear(py_cutoff.getFullYear() - 1);
-
-  const current = rows
-    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait > 0; })
-    .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))
-    .map(r => ({ label: fmtLabel(r.date, days), value: r.avg_wait }));
-
-  const prior = rows
-    .filter(r => { const d = parseLocalDate(r.date); return d >= py_cutoff && d <= py_today && r.avg_wait > 0; })
-    .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))
-    .map(r => {
-      const shifted = parseLocalDate(r.date);
-      shifted.setFullYear(shifted.getFullYear() + 1);
-      const shiftedStr = `${shifted.getFullYear()}-${String(shifted.getMonth()+1).padStart(2,'0')}-${String(shifted.getDate()).padStart(2,'0')}`;
-      return { label: fmtLabel(shiftedStr, days), value: r.avg_wait };
-    });
-
-  const labelMap = {};
-  current.forEach(p => { labelMap[p.label] = { label: p.label, current: p.value }; });
-  prior.forEach(p => {
-    if (!labelMap[p.label]) labelMap[p.label] = { label: p.label };
-    labelMap[p.label].prior = p.value;
-  });
-
-  const merged = Object.values(labelMap).sort((a, b) => {
-    const ka = a.label, kb = b.label;
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  });
-
-  const latest      = current.length ? current[current.length - 1].value : null;
-  const priorLatest = prior.length   ? prior[prior.length - 1].value     : null;
-  const delta = (latest && priorLatest)
-    ? Math.round(((latest - priorLatest) / priorLatest) * 100)
-    : null;
-
-  return { merged, latest, delta };
+function toDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
 function fmtLabel(dateStr, days) {
   const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
   if (days <= 30) return `${m}/${d}`;
   return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m-1]} '${String(y).slice(2)}`;
+}
+
+function buildChartData(rows, days) {
+  if (!rows.length) return { merged: [], latest: null, delta: null };
+
+  const today   = todayLocal();
+  const cutoff  = new Date(today); cutoff.setDate(cutoff.getDate() - days);
+
+  // prior year: exact same calendar window, shifted back 1 year
+  const pyToday  = new Date(today);  pyToday.setFullYear(pyToday.getFullYear() - 1);
+  const pyCutoff = new Date(cutoff); pyCutoff.setFullYear(pyCutoff.getFullYear() - 1);
+
+  // current = this year's data in window, keyed by their actual dateStr
+  const currentRows = rows
+    .filter(r => {
+      const d = parseLocalDate(r.date);
+      return d >= cutoff && d <= today && r.avg_wait > 0;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // prior = last year's data in same window
+  const priorRows = rows
+    .filter(r => {
+      const d = parseLocalDate(r.date);
+      return d >= pyCutoff && d <= pyToday && r.avg_wait > 0;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // build merged array keyed by current-year dateStr
+  // prior rows get shifted +1 year so they align on the same x-axis positions
+  const map = {};
+
+  currentRows.forEach(r => {
+    map[r.date] = { date: r.date, label: fmtLabel(r.date, days), current: r.avg_wait };
+  });
+
+  priorRows.forEach(r => {
+    const shifted = parseLocalDate(r.date);
+    shifted.setFullYear(shifted.getFullYear() + 1);
+    const key = toDateStr(shifted);
+    if (!map[key]) map[key] = { date: key, label: fmtLabel(key, days) };
+    map[key].prior = r.avg_wait;
+  });
+
+  // sort by actual date string (YYYY-MM-DD sorts correctly lexicographically)
+  const merged = Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
+
+  const latest      = currentRows.length ? currentRows[currentRows.length - 1].avg_wait : null;
+  const priorLatest = priorRows.length   ? priorRows[priorRows.length - 1].avg_wait     : null;
+  const delta = (latest && priorLatest)
+    ? Math.round(((latest - priorLatest) / priorLatest) * 100)
+    : null;
+
+  return { merged, latest, delta };
 }
 
 function WaitChart({ park, allDailyRows }) {
