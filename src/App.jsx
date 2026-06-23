@@ -26,11 +26,11 @@ const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" 
 const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
 
 const SUBREDDITS = [
-  { sub: "sixflags", sort: "top" },
-  { sub: "rollercoasters", sort: "top" },
-  { sub: "ThemeParkDiscussion", sort: "top" },
-  { sub: "cedarpoint", sort: "top" },
-  { sub: "themeparks", sort: "top" },
+  { sub: "sixflags", sort: "top", pages: 5 },
+  { sub: "rollercoasters", sort: "top", pages: 3 },
+  { sub: "ThemeParkDiscussion", sort: "top", pages: 3 },
+  { sub: "themeparks", sort: "top", pages: 3 },
+  { sub: "cedarpoint", sort: "top", pages: 2 },
 ];
 
 async function savePostsToDB(posts) {
