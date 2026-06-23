@@ -123,35 +123,40 @@ const RANGES = [
   { label: "1Y",  days: 365 },
 ];
 
+// parse date string as local date (not UTC) to avoid off-by-one
+function parseLocalDate(dateStr) {
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function todayLocal() {
+  const n = new Date();
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+}
+
 function buildChartData(rows, days) {
-  if (!rows.length) return { current: [], prior: [], latest: null, delta: null };
+  if (!rows.length) return { merged: [], latest: null, delta: null };
 
-  const now      = new Date();
-  const cutoff   = new Date(now); cutoff.setDate(cutoff.getDate() - days);
-  const py_now   = new Date(now); py_now.setFullYear(py_now.getFullYear() - 1);
-  const py_cut   = new Date(cutoff); py_cut.setFullYear(py_cut.getFullYear() - 1);
+  const today  = todayLocal();
+  const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() - days);
+  const py_today  = new Date(today);  py_today.setFullYear(py_today.getFullYear() - 1);
+  const py_cutoff = new Date(cutoff); py_cutoff.setFullYear(py_cutoff.getFullYear() - 1);
 
-  // current window
   const current = rows
-    .filter(r => { const d = new Date(r.date); return d >= cutoff && d <= now && r.avg_wait > 0; })
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
-    .map(r => ({
-      date: r.date,
-      label: fmtLabel(r.date, days),
-      value: r.avg_wait,
-    }));
+    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait > 0; })
+    .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))
+    .map(r => ({ label: fmtLabel(r.date, days), value: r.avg_wait }));
 
-  // prior year same window
   const prior = rows
-    .filter(r => { const d = new Date(r.date); return d >= py_cut && d <= py_now && r.avg_wait > 0; })
-    .sort((a, b) => new Date(a.date) - new Date(b.date))
+    .filter(r => { const d = parseLocalDate(r.date); return d >= py_cutoff && d <= py_today && r.avg_wait > 0; })
+    .sort((a, b) => parseLocalDate(a.date) - parseLocalDate(b.date))
     .map(r => {
-      const shifted = new Date(r.date);
+      const shifted = parseLocalDate(r.date);
       shifted.setFullYear(shifted.getFullYear() + 1);
-      return { date: shifted.toISOString().slice(0, 10), label: fmtLabel(shifted.toISOString().slice(0, 10), days), value: r.avg_wait };
+      const shiftedStr = `${shifted.getFullYear()}-${String(shifted.getMonth()+1).padStart(2,'0')}-${String(shifted.getDate()).padStart(2,'0')}`;
+      return { label: fmtLabel(shiftedStr, days), value: r.avg_wait };
     });
 
-  // merge by label for tooltip alignment
   const labelMap = {};
   current.forEach(p => { labelMap[p.label] = { label: p.label, current: p.value }; });
   prior.forEach(p => {
@@ -159,7 +164,10 @@ function buildChartData(rows, days) {
     labelMap[p.label].prior = p.value;
   });
 
-  const merged = Object.values(labelMap).sort((a, b) => a.label.localeCompare(b.label));
+  const merged = Object.values(labelMap).sort((a, b) => {
+    const ka = a.label, kb = b.label;
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
 
   const latest      = current.length ? current[current.length - 1].value : null;
   const priorLatest = prior.length   ? prior[prior.length - 1].value     : null;
@@ -171,10 +179,9 @@ function buildChartData(rows, days) {
 }
 
 function fmtLabel(dateStr, days) {
-  const d = new Date(dateStr);
-  if (days <= 7)  return `${d.getMonth()+1}/${d.getDate()}`;
-  if (days <= 30) return `${d.getMonth()+1}/${d.getDate()}`;
-  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
+  const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+  if (days <= 30) return `${m}/${d}`;
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m-1]} '${String(y).slice(2)}`;
 }
 
 function WaitChart({ park, allDailyRows }) {
@@ -183,11 +190,8 @@ function WaitChart({ park, allDailyRows }) {
   const rows = allDailyRows.filter(r => r.park === park);
   const { merged, latest, delta } = buildChartData(rows, range);
 
-  const accent = GREEN;
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
   const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
-
-  const CustomDot = () => null;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
@@ -195,12 +199,12 @@ function WaitChart({ park, allDailyRows }) {
       {/* header row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 13, color: "#9ca3af", marginBottom: 4 }}>Avg Wait · {park}</div>
+          <div style={{ fontSize: 13, color: "#111827", fontWeight: 600, marginBottom: 4 }}>{park}</div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
               {latest !== null ? latest : "—"}
             </span>
-            <span style={{ fontSize: 13, color: "#9ca3af" }}>min</span>
+            <span style={{ fontSize: 13, color: "#111827" }}>min avg wait</span>
             {deltaText && (
               <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>
             )}
@@ -215,9 +219,9 @@ function WaitChart({ park, allDailyRows }) {
               onClick={() => setRange(r.days)}
               style={{
                 fontSize: 11, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
-                border: range === r.days ? `1px solid ${accent}` : "1px solid #f3f4f6",
-                background: range === r.days ? (accent === GREEN ? "#f0fdf4" : accent === INDIGO ? "#eef2ff" : "#fff7f3") : "#fff",
-                color: range === r.days ? accent : "#6b7280",
+                border: range === r.days ? `1px solid ${GREEN}` : "1px solid #f3f4f6",
+                background: range === r.days ? "#f0fdf4" : "#fff",
+                color: range === r.days ? GREEN : "#6b7280",
                 fontWeight: range === r.days ? 600 : 400,
               }}
             >
@@ -404,10 +408,18 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
 
 // ── Waits panel ───────────────────────────────────────────────
 
-function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh }) {
+function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh, parkCounts }) {
   const parksWithData = new Set(allDailyRows.map(r => r.park));
+
+  // order: SF parks sorted by post count desc, then Cedar Point last
+  const sfOrdered = PARKS
+    .filter(p => p.startsWith("Six Flags") && parksWithData.has(p))
+    .sort((a, b) => (parkCounts[b] || 0) - (parkCounts[a] || 0));
+  const cpOrdered = PARKS.filter(p => !p.startsWith("Six Flags") && parksWithData.has(p));
+  const allOrdered = [...sfOrdered, ...cpOrdered];
+
   const parks = parkFilter === "All Parks"
-    ? PARKS.filter(p => parksWithData.has(p))
+    ? allOrdered
     : [parkFilter].filter(p => parksWithData.has(p));
 
   if (dailyLoading) return (
@@ -611,6 +623,7 @@ export default function App() {
                 allDailyRows={allDailyRows}
                 dailyLoading={dailyLoading}
                 onRefresh={refreshWaitTimes}
+                parkCounts={parkCounts}
               />
             )}
           </div>
