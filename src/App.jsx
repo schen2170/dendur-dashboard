@@ -187,9 +187,12 @@ function MiniChart({ current, prior, days }) {
 
   const allVals = hasData
     ? [...current.map(p => p.v), ...prior.map(p => p.v)]
-    : [0, 10];
-  const minV = Math.max(0, Math.min(...allVals) - 2);
-  const maxV = Math.max(...allVals) + 5;
+    : [0, 30];
+  const rawMin = Math.min(...allVals);
+  const rawMax = Math.max(...allVals);
+  const padding = Math.max(10, (rawMax - rawMin) * 0.25);
+  const minV = Math.max(0, rawMin - padding * 0.5);
+  const maxV = rawMax + padding;
   const range = maxV - minV || 1;
 
   // x window is always the requested time window, not just where data exists
@@ -319,8 +322,8 @@ function MiniChart({ current, prior, days }) {
             <text x={PAD.l - 4} y={yOf(v) + 4} textAnchor="end" fontSize="9" fill="#9ca3af">{Math.round(v)}</text>
           </g>
         ))}
-        {/* prior year dotted grey */}
-        {priorPaths.map((d, i) => (
+        {/* prior year dotted grey — only show if current year has data */}
+        {hasData && priorPaths.map((d, i) => (
           <path key={i} d={d} fill="none" stroke={GREY_PRIOR} strokeWidth="1.5" strokeDasharray="4,3" strokeLinecap="round" strokeLinejoin="round" />
         ))}
         {/* current year green */}
