@@ -15,13 +15,6 @@ const API    = "https://dendur-waits-api-production.up.railway.app";
 const REDDIT_API = "https://dendur-reddit-api-production.up.railway.app";
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-const KPI_LABELS = {
-  wait_times:    { label: "Wait Times", color: "#d97706" },
-  ride_closures: { label: "Closures",   color: "#dc2626" },
-  crowd_levels:  { label: "Crowds",     color: "#7c3aed" },
-  staff_issues:  { label: "Staff",      color: "#db2777" },
-};
-
 const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" };
 const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
 
@@ -30,7 +23,6 @@ const SUBREDDITS = [
   { sub: "rollercoasters", sort: "top" },
   { sub: "ThemeParkDiscussion", sort: "top" },
 ];
-
 
 async function fetchWaitData() {
   try {
@@ -76,23 +68,24 @@ async function fetchRedditPosts({ sub, sort }) {
       }));
   } catch { return []; }
 }
-async function classifyParks(posts) {
-  const prompt = `You are classifying Reddit posts by theme park. For each post, identify which specific park it is about.
 
+async function classifyParks(posts) {
+  console.log(`[Claude] Classifying ${posts.length} posts...`);
+  const prompt = `You are classifying Reddit posts by theme park for an investment research tool.
+
+For each post, identify which specific park it is about.
 Park options: ${PARKS.join(", ")}
 
 Rules:
-- Return the EXACT park name from the list above, or null if no specific park is clearly identifiable
-- Base your decision on the full title and body content
-- A post mentioning "Great Adventure" = "Six Flags Great Adventure"
-- A post mentioning "Magic Mountain" or "SFMM" = "Six Flags Magic Mountain"
-- A post mentioning "Cedar Point" or "CP" = "Cedar Point"
-- If the post is about multiple parks or no specific park, return null
+- Return the EXACT park name from the list, or null if no specific park is clearly identifiable
+- Use full title and body to decide
+- Common abbreviations: SFMM = Six Flags Magic Mountain, GA = Great Adventure, CP = Cedar Point, SFGAm = Six Flags Great America, SFOG = Six Flags Over Georgia, SFOT = Six Flags Over Texas
+- If post covers multiple parks or is general, return null
 
 Posts:
 ${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
 
-Respond ONLY with a JSON array of ${posts.length} objects like: [{"park": "Cedar Point"}, {"park": null}, ...]
+Respond ONLY with a JSON array of ${posts.length} objects like: [{"park": "Cedar Point"}, {"park": null}]
 No markdown, no extra text.`;
 
   try {
@@ -106,9 +99,14 @@ No markdown, no extra text.`;
       }),
     });
     const d = await res.json();
+    console.log("[Claude] API response:", JSON.stringify(d).slice(0, 300));
     const text = d?.content?.[0]?.text || "[]";
-    return JSON.parse(text.replace(/```json|```/g, "").trim());
-  } catch {
+    console.log("[Claude] Text:", text.slice(0, 300));
+    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+    console.log("[Claude] Parsed sample:", parsed.slice(0, 3));
+    return parsed;
+  } catch (e) {
+    console.error("[Claude] Error:", e);
     return posts.map(() => ({ park: null }));
   }
 }
@@ -176,18 +174,18 @@ function WaitCard({ park, data }) {
   );
 }
 
-function RedditPanel({ posts, busy, loading }) {
+function RedditPanel({ posts, busy, loading, status }) {
   return (
     <div>
       {!posts.length && !busy && (
         <div style={{ textAlign: "center", padding: "4rem 2rem", color: "#9ca3af" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 6 }}>No data loaded</div>
-          <div style={{ fontSize: 13 }}>Click Refresh Data to pull recent Reddit posts</div>
+          <div style={{ fontSize: 13 }}>Click Refresh Data to pull and classify recent Reddit posts</div>
         </div>
       )}
       {busy && (
         <div style={{ textAlign: "center", padding: "4rem 2rem", color: "#9ca3af" }}>
-          <div style={{ fontSize: 13 }}>Pulling posts from Reddit…</div>
+          <div style={{ fontSize: 13 }}>{status || "Working…"}</div>
           <div style={{ width: 200, height: 3, background: "#f3f4f6", borderRadius: 2, margin: "16px auto 0" }}>
             <div style={{ height: "100%", background: GREEN, borderRadius: 2, width: "60%" }} />
           </div>
@@ -196,9 +194,16 @@ function RedditPanel({ posts, busy, loading }) {
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
         {posts.map((p, i) => (
           <div key={i} style={{ background: "#fff", border: "1px solid #f3f4f6", borderRadius: 10, padding: "1rem 1.25rem", boxShadow: "0 1px 2px rgba(0,0,0,0.03)" }}>
-            <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#111827", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>{p.title}</a>
-            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 3 }}>r/{p.subreddit} · {p.created} · {p.score} pts</div>
-            {p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0, 200)}{p.body.length > 200 ? "…" : ""}</div>}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1, marginRight: 12 }}>
+                <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#111827", fontWeight: 600, fontSize: 13, textDecoration: "none" }}>{p.title}</a>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 3 }}>r/{p.subreddit} · {p.created} · {p.score} pts</div>
+                {p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0, 200)}{p.body.length > 200 ? "…" : ""}</div>}
+              </div>
+              {p.park && (
+                <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{p.park}</span>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -244,6 +249,7 @@ export default function App() {
   const [waitData, setWaitData]         = useState({});
   const [waitLoading, setWaitLoading]   = useState(true);
   const [loading, setLoading]           = useState(false);
+  const [status, setStatus]             = useState("");
   const [selectedPark, setSelectedPark] = useState("All Parks");
   const [activeTab, setActiveTab]       = useState("reddit");
 
@@ -251,8 +257,8 @@ export default function App() {
     fetchWaitData().then(d => { setWaitData(d); setWaitLoading(false); });
   }, []);
 
-const fetchPosts = useCallback(async () => {
-    setLoading(true); setPosts([]);
+  const fetchPosts = useCallback(async () => {
+    setLoading(true); setPosts([]); setStatus("Fetching Reddit posts…");
     const allArrays = await Promise.all(SUBREDDITS.map(fetchRedditPosts));
     const seen = new Set();
     const all = allArrays.flat().filter(p => {
@@ -260,21 +266,30 @@ const fetchPosts = useCallback(async () => {
       seen.add(p.id);
       return true;
     });
-    // Classify parks in batches of 10
+    console.log(`[App] Fetched ${all.length} posts`);
+    setStatus(`Classifying ${all.length} posts with Claude…`);
+
     const BATCH = 10, results = [];
     for (let i = 0; i < all.length; i += BATCH) {
-      const batch = all.slice(i, i + BATCH);
-      const res = await classifyParks(batch);
+      const res = await classifyParks(all.slice(i, i + BATCH));
       results.push(...res);
+      setStatus(`Classifying… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
     }
+
+    console.log(`[App] Classification results:`, results.slice(0, 5));
     const classified = all.map((p, i) => ({
       ...p,
       park: results[i]?.park || null,
     })).filter(p => p.park);
+
+    console.log(`[App] Park-matched posts: ${classified.length}`);
+    setStatus(`Done — ${classified.length} park-specific posts found`);
     setPosts(classified);
     setLoading(false);
   }, []);
-const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
+
+  const parkCounts = posts.reduce((a, p) => { a[p.park] = (a[p.park]||0)+1; return a; }, {});
+  const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
 
   return (
     <div style={{ background: "#f9fafb", minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, color: "#111827" }}>
@@ -288,12 +303,12 @@ const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {posts.length > 0 && (
             <span style={{ fontSize: 11, color: GREEN, background: "#f0fdf4", padding: "3px 10px", borderRadius: 20, fontWeight: 600 }}>
-              {posts.length} posts fetched
+              {posts.length} posts classified
             </span>
           )}
           <button onClick={fetchPosts} disabled={loading}
             style={{ background: loading ? "#f3f4f6" : "#111827", color: loading ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer" }}>
-            {loading ? "Fetching…" : "Refresh Data"}
+            {loading ? status || "Working…" : "Refresh Data"}
           </button>
         </div>
       </div>
@@ -308,35 +323,43 @@ const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.
               fontWeight: selectedPark==="All Parks" ? 600 : 400 }}>
             All Parks
           </div>
+
           <div style={{ fontSize: 10, fontWeight: 700, color: ORANGE, textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
             <span>Six Flags</span>
             <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
           </div>
-          {PARKS.filter(p => p.startsWith("Six Flags")).map(p => (
-            <div key={p} onClick={() => setSelectedPark(p)}
-              style={{ padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                background: selectedPark===p ? "#f0fdf4" : "transparent",
-                color: selectedPark===p ? GREEN : "#374151",
-                fontWeight: selectedPark===p ? 600 : 400 }}>
-              {p}
-            </div>
-          ))}
+          {PARKS.filter(p => p.startsWith("Six Flags")).map(p => {
+            const count = parkCounts[p] || 0;
+            return (
+              <div key={p} onClick={() => setSelectedPark(p)}
+                style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
+                  background: selectedPark===p ? "#f0fdf4" : "transparent",
+                  color: selectedPark===p ? GREEN : "#374151",
+                  fontWeight: selectedPark===p ? 600 : 400 }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 145 }}>{p}</span>
+                {count > 0 && <span style={{ fontSize: 10, color: "#d1d5db", flexShrink: 0 }}>{count}</span>}
+              </div>
+            );
+          })}
+
           <div style={{ fontSize: 10, fontWeight: 700, color: INDIGO, textTransform: "uppercase", padding: "0.75rem 0.5rem 4px", display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{ flex: 1, height: 1, background: "#e0e7ff" }} />
             <span>Cedar Point</span>
             <div style={{ flex: 1, height: 1, background: "#e0e7ff" }} />
           </div>
-          {PARKS.filter(p => !p.startsWith("Six Flags")).map(p => (
-            <div key={p} onClick={() => setSelectedPark(p)}
-              style={{ padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
-                background: selectedPark===p ? "#f0fdf4" : "transparent",
-                color: selectedPark===p ? GREEN : "#374151",
-                fontWeight: selectedPark===p ? 600 : 400 }}>
-              {p}
-            </div>
-          ))}
+          {PARKS.filter(p => !p.startsWith("Six Flags")).map(p => {
+            const count = parkCounts[p] || 0;
+            return (
+              <div key={p} onClick={() => setSelectedPark(p)}
+                style={{ padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
+                  background: selectedPark===p ? "#f0fdf4" : "transparent",
+                  color: selectedPark===p ? GREEN : "#374151",
+                  fontWeight: selectedPark===p ? 600 : 400 }}>
+                {p}
+              </div>
+            );
+          })}
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
@@ -356,7 +379,7 @@ const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.
           </div>
           <div style={{ padding: "1.25rem 1.5rem", flex: 1 }}>
             {activeTab === "reddit" ? (
-              <RedditPanel posts={visiblePosts} busy={loading} loading={loading} />
+              <RedditPanel posts={visiblePosts} busy={loading} loading={loading} status={status} />
             ) : (
               <WaitsPanel parkFilter={selectedPark} waitData={waitData} waitLoading={waitLoading} />
             )}
