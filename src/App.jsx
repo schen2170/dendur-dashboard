@@ -349,23 +349,36 @@ function MiniChart({ current, prior, days }) {
   );
 }
 
-function WaitChart({ park, allDailyRows }) {
+function WaitChart({ park, allDailyRows, liveValue }) {
   const [range, setRange] = useState(30);
 
   const rows = allDailyRows.filter(r => r.park === park);
-  const { current, prior, latest, delta } = buildChartData(rows, range);
+  const { current, prior, latest: historicalLatest, delta } = buildChartData(rows, range);
+
+  // prefer live value for the displayed number
+  const displayValue = liveValue?.avg_wait ?? historicalLatest;
+  const scrapedAt = liveValue?.scraped_at
+    ? new Date(liveValue.scraped_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : null;
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
-  const deltaText  = latest === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
+  const deltaText  = displayValue === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 13, color: "#111827", fontWeight: 600, marginBottom: 4 }}>{park}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div style={{ fontSize: 13, color: "#111827", fontWeight: 600 }}>{park}</div>
+            {scrapedAt && (
+              <span style={{ fontSize: 10, color: GREEN, background: "#f0fdf4", padding: "2px 7px", borderRadius: 10, fontWeight: 600 }}>
+                ● Live {scrapedAt}
+              </span>
+            )}
+          </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
-              {latest !== null ? latest : "—"}
+              {displayValue !== null ? displayValue : "—"}
             </span>
             <span style={{ fontSize: 13, color: "#111827" }}>min avg wait</span>
             {deltaText && <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>}
@@ -510,10 +523,9 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
 
 // ── Waits panel ───────────────────────────────────────────────
 
-function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh, parkCounts }) {
+function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, liveData, liveLoading, onRefresh, parkCounts }) {
   const parksWithData = new Set(allDailyRows.map(r => r.park));
 
-  // order: SF parks sorted by post count desc, then Cedar Point last
   const sfOrdered = PARKS
     .filter(p => p.startsWith("Six Flags") && parksWithData.has(p))
     .sort((a, b) => (parkCounts[b] || 0) - (parkCounts[a] || 0));
@@ -535,11 +547,11 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh, parkCou
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>Wait Time Trends</div>
-          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>Daily avg · Green = this year · Grey dotted = prior year</div>
+          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>Live now · Green = this year · Grey dotted = prior year</div>
         </div>
-        <button onClick={onRefresh} disabled={dailyLoading}
-          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", background: dailyLoading ? "#f3f4f6" : "#111827", color: dailyLoading ? "#9ca3af" : "#fff", fontWeight: 600, cursor: dailyLoading ? "not-allowed" : "pointer" }}>
-          {dailyLoading ? "Loading…" : "Refresh Wait Times"}
+        <button onClick={onRefresh} disabled={liveLoading}
+          style={{ fontSize: 11, padding: "5px 12px", borderRadius: 8, border: "none", background: liveLoading ? "#f3f4f6" : "#111827", color: liveLoading ? "#9ca3af" : "#fff", fontWeight: 600, cursor: liveLoading ? "not-allowed" : "pointer" }}>
+          {liveLoading ? "Scraping…" : "Refresh Live"}
         </button>
       </div>
 
@@ -550,7 +562,7 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh, parkCou
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))", gap: "0.75rem" }}>
           {parks.map(p => (
-            <WaitChart key={p} park={p} allDailyRows={allDailyRows} />
+            <WaitChart key={p} park={p} allDailyRows={allDailyRows} liveValue={liveData[p] || null} />
           ))}
         </div>
       )}
@@ -563,7 +575,9 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, onRefresh, parkCou
 export default function App() {
   const [posts, setPosts]                         = useState([]);
   const [allDailyRows, setAllDailyRows]           = useState([]);
+  const [liveData, setLiveData]                   = useState({});
   const [dailyLoading, setDailyLoading]           = useState(true);
+  const [liveLoading, setLiveLoading]             = useState(false);
   const [loading, setLoading]                     = useState(false);
   const [status, setStatus]                       = useState("");
   const [selectedPark, setSelectedPark]           = useState("All Parks");
@@ -572,13 +586,22 @@ export default function App() {
   const [sortBy, setSortBy]                       = useState("recent");
   const [activeTab, setActiveTab]                 = useState("reddit");
 
-  // load all daily rows once on mount
+  async function fetchLiveData() {
+    try {
+      const rows = await fetch(`${API}/waits/latest`).then(r => r.json());
+      const map = {};
+      rows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, scraped_at: r.scraped_at }; });
+      setLiveData(map);
+    } catch (e) { console.error("live fetch failed", e); }
+  }
+
   useEffect(() => {
     loadStoredPosts().then(p => { if (p.length) setPosts(p); });
     fetch(`${API}/waits/daily`)
       .then(r => r.json())
       .then(rows => { setAllDailyRows(rows); setDailyLoading(false); })
       .catch(() => setDailyLoading(false));
+    fetchLiveData();
   }, []);
 
   const fetchPosts = useCallback(async () => {
@@ -610,12 +633,16 @@ export default function App() {
   }, []);
 
   const refreshWaitTimes = useCallback(async () => {
-    setDailyLoading(true);
+    setLiveLoading(true);
+    setStatus("Scraping live wait times…");
     try {
+      await fetch(`${API}/scrape/live`);
+      await fetchLiveData();
       const rows = await fetch(`${API}/waits/daily`).then(r => r.json());
       setAllDailyRows(rows);
     } catch (e) { console.error(e); }
-    setDailyLoading(false);
+    setLiveLoading(false);
+    setStatus("");
   }, []);
 
   const refreshAll = useCallback(async () => {
@@ -644,9 +671,9 @@ export default function App() {
               {posts.length} posts classified
             </span>
           )}
-          <button onClick={refreshAll} disabled={loading || dailyLoading}
-            style={{ background: (loading || dailyLoading) ? "#f3f4f6" : "#111827", color: (loading || dailyLoading) ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: (loading || dailyLoading) ? "not-allowed" : "pointer" }}>
-            {(loading || dailyLoading) ? status || "Working…" : "Refresh All"}
+          <button onClick={refreshAll} disabled={loading || liveLoading}
+            style={{ background: (loading || liveLoading) ? "#f3f4f6" : "#111827", color: (loading || liveLoading) ? "#9ca3af" : "#fff", border: "none", borderRadius: 8, padding: "7px 18px", fontSize: 12, fontWeight: 600, cursor: (loading || liveLoading) ? "not-allowed" : "pointer" }}>
+            {(loading || liveLoading) ? status || "Working…" : "Refresh All"}
           </button>
         </div>
       </div>
@@ -724,6 +751,8 @@ export default function App() {
                 parkFilter={selectedPark}
                 allDailyRows={allDailyRows}
                 dailyLoading={dailyLoading}
+                liveData={liveData}
+                liveLoading={liveLoading}
                 onRefresh={refreshWaitTimes}
                 parkCounts={parkCounts}
               />
