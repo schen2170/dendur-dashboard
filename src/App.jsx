@@ -117,9 +117,8 @@ Respond ONLY with a JSON array of ${posts.length} objects. No markdown, no extra
 // ── Wait time chart ───────────────────────────────────────────
 
 const RANGES = [
-  { label: "1W",  days: 7   },
-  { label: "1M",  days: 30  },
-  { label: "1Y",  days: 365 },
+  { label: "1W", days: 7  },
+  { label: "1M", days: 30 },
 ];
 
 function parseLocalDate(dateStr) {
@@ -203,9 +202,7 @@ function MiniChart({ current, prior, days }) {
   function xOf(dateStr, shiftYear) {
     const d = parseLocalDate(dateStr);
     if (shiftYear) d.setFullYear(d.getFullYear() + 1);
-    // clamp to window
-    const t = Math.min(Math.max(d.getTime(), startT), endT);
-    return PAD.l + ((t - startT) / span) * cW;
+    return PAD.l + ((d.getTime() - startT) / span) * cW;
   }
   function yOf(v) {
     return PAD.t + cH - ((v - minV) / range) * cH;
@@ -215,14 +212,17 @@ function MiniChart({ current, prior, days }) {
 
   function buildPath(pts, shiftYear) {
     if (!pts.length) return [];
-    // filter prior so it doesn't extend past today
     const filtered = shiftYear
       ? pts.filter(p => {
           const d = parseLocalDate(p.date);
           d.setFullYear(d.getFullYear() + 1);
-          return d.getTime() <= endT;
+          const t = d.getTime();
+          return t >= startT && t <= endT;
         })
-      : pts;
+      : pts.filter(p => {
+          const t = parseLocalDate(p.date).getTime();
+          return t >= startT && t <= endT;
+        });
     if (!filtered.length) return [];
 
     const segments = [];
