@@ -15,9 +15,6 @@ const API    = "https://dendur-waits-api-production.up.railway.app";
 const REDDIT_API = "https://dendur-reddit-api-production.up.railway.app";
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-const SENTIMENT    = { positive: GREEN, neutral: "#6b7280", negative: "#dc2626" };
-const SENTIMENT_BG = { positive: "#f0fdf4", neutral: "#f9fafb", negative: "#fef2f2" };
-
 const SUBREDDITS = [
   { sub: "sixflags", sort: "top" },
   { sub: "rollercoasters", sort: "top" },
@@ -70,7 +67,6 @@ async function fetchRedditPosts({ sub, sort }) {
 }
 
 async function classifyParks(posts) {
-  console.log(`[Claude] Classifying ${posts.length} posts...`);
   const prompt = `You are classifying Reddit posts by theme park for an investment research tool.
 
 For each post, identify which specific park it is about.
@@ -81,6 +77,7 @@ Rules:
 - Use full title and body to decide
 - Common abbreviations: SFMM = Six Flags Magic Mountain, GA = Great Adventure, CP = Cedar Point, SFGAm = Six Flags Great America, SFOG = Six Flags Over Georgia, SFOT = Six Flags Over Texas
 - If post covers multiple parks or is general, return null
+- If a post mentions Cedar Point AND a Six Flags park, return null
 
 Posts:
 ${posts.map((p, i) => `[${i}] TITLE: ${p.title}\nBODY: ${p.body}`).join("\n\n")}
@@ -99,12 +96,8 @@ No markdown, no extra text.`;
       }),
     });
     const d = await res.json();
-    console.log("[Claude] API response:", JSON.stringify(d).slice(0, 300));
     const text = d?.content?.[0]?.text || "[]";
-    console.log("[Claude] Text:", text.slice(0, 300));
-    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-    console.log("[Claude] Parsed sample:", parsed.slice(0, 3));
-    return parsed;
+    return JSON.parse(text.replace(/```json|```/g, "").trim());
   } catch (e) {
     console.error("[Claude] Error:", e);
     return posts.map(() => ({ park: null }));
@@ -174,7 +167,7 @@ function WaitCard({ park, data }) {
   );
 }
 
-function RedditPanel({ posts, busy, loading, status }) {
+function RedditPanel({ posts, busy, status }) {
   return (
     <div>
       {!posts.length && !busy && (
@@ -266,23 +259,17 @@ export default function App() {
       seen.add(p.id);
       return true;
     });
-    console.log(`[App] Fetched ${all.length} posts`);
     setStatus(`Classifying ${all.length} posts with Claude…`);
-
     const BATCH = 10, results = [];
     for (let i = 0; i < all.length; i += BATCH) {
       const res = await classifyParks(all.slice(i, i + BATCH));
       results.push(...res);
       setStatus(`Classifying… ${Math.min(i + BATCH, all.length)} / ${all.length}`);
     }
-
-    console.log(`[App] Classification results:`, results.slice(0, 5));
     const classified = all.map((p, i) => ({
       ...p,
       park: results[i]?.park || null,
     })).filter(p => p.park);
-
-    console.log(`[App] Park-matched posts: ${classified.length}`);
     setStatus(`Done — ${classified.length} park-specific posts found`);
     setPosts(classified);
     setLoading(false);
@@ -290,6 +277,10 @@ export default function App() {
 
   const parkCounts = posts.reduce((a, p) => { a[p.park] = (a[p.park]||0)+1; return a; }, {});
   const visiblePosts = selectedPark === "All Parks" ? posts : posts.filter(p => p.park === selectedPark);
+
+  const sfParks = [...PARKS.filter(p => p.startsWith("Six Flags"))]
+    .sort((a, b) => (parkCounts[b]||0) - (parkCounts[a]||0));
+  const cpParks = PARKS.filter(p => !p.startsWith("Six Flags"));
 
   return (
     <div style={{ background: "#f9fafb", minHeight: "100vh", fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13, color: "#111827" }}>
@@ -316,7 +307,8 @@ export default function App() {
       <div style={{ display: "flex", height: "calc(100vh - 57px)" }}>
         <div style={{ width: 210, background: "#fff", borderRight: "1px solid #f3f4f6", padding: "1rem 0.75rem", overflowY: "auto", flexShrink: 0 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", padding: "0 0.5rem", marginBottom: 6 }}>Parks</div>
-         <div onClick={() => setSelectedPark("All Parks")}
+
+          <div onClick={() => setSelectedPark("All Parks")}
             style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", borderRadius: 7, cursor: "pointer", marginBottom: 1, fontSize: 12,
               background: selectedPark==="All Parks" ? "#f0fdf4" : "transparent",
               color: selectedPark==="All Parks" ? GREEN : "#374151",
@@ -330,9 +322,7 @@ export default function App() {
             <span>Six Flags</span>
             <div style={{ flex: 1, height: 1, background: "#fee2e2" }} />
           </div>
-         {[...PARKS.filter(p => p.startsWith("Six Flags"))]
-            .sort((a, b) => (parkCounts[b]||0) - (parkCounts[a]||0))
-            .map(p => {
+          {sfParks.map(p => {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
@@ -351,7 +341,7 @@ export default function App() {
             <span>Cedar Point</span>
             <div style={{ flex: 1, height: 1, background: "#e0e7ff" }} />
           </div>
-          {PARKS.filter(p => !p.startsWith("Six Flags")).map(p => {
+          {cpParks.map(p => {
             const count = parkCounts[p] || 0;
             return (
               <div key={p} onClick={() => setSelectedPark(p)}
@@ -364,7 +354,8 @@ export default function App() {
               </div>
             );
           })}
-          
+        </div>
+
         <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
           <div style={{ background: "#fff", borderBottom: "1px solid #f3f4f6", padding: "0.75rem 1.5rem", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>{selectedPark}</div>
@@ -382,7 +373,7 @@ export default function App() {
           </div>
           <div style={{ padding: "1.25rem 1.5rem", flex: 1 }}>
             {activeTab === "reddit" ? (
-              <RedditPanel posts={visiblePosts} busy={loading} loading={loading} status={status} />
+              <RedditPanel posts={visiblePosts} busy={loading} status={status} />
             ) : (
               <WaitsPanel parkFilter={selectedPark} waitData={waitData} waitLoading={waitLoading} />
             )}
