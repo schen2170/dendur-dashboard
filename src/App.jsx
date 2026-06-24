@@ -148,13 +148,13 @@ function buildChartData(rows, days, liveValue) {
     .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait >= 3; })
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // inject today's live reading only if no daily avg exists for today
-  if (liveValue?.avg_wait && liveValue.avg_wait >= 3) {
+  // inject today's avg from live scrape if not already in daily data
+  const injectedAvg = liveValue?.today_avg || liveValue?.avg_wait;
+  if (injectedAvg && injectedAvg >= 3) {
     const alreadyHasToday = currentRows.some(r => r.date === todayStr);
     if (!alreadyHasToday) {
-      currentRows = [...currentRows, { date: todayStr, avg_wait: liveValue.avg_wait }];
+      currentRows = [...currentRows, { date: todayStr, avg_wait: injectedAvg }];
     }
-    // if daily avg exists for today, keep it (don't override with live)
   }
 
   currentRows = currentRows.map(r => ({ date: r.date, v: r.avg_wait }));
@@ -166,8 +166,11 @@ function buildChartData(rows, days, liveValue) {
 
   const current = currentRows;
 
-  const latest      = current.length ? current[current.length - 1].v : null;
-  const latestDate  = current.length ? current[current.length - 1].date : null;
+  const latest     = current.length ? current[current.length - 1].v : null;
+  const latestDate = current.length ? current[current.length - 1].date : null;
+
+  // for delta, prefer today_avg (true daily avg) over live current reading
+  const deltaBase = liveValue?.today_avg || latest;
 
   let priorLatest = null;
   if (latestDate) {
@@ -178,8 +181,8 @@ function buildChartData(rows, days, liveValue) {
     if (close) priorLatest = close.v;
   }
 
-  const delta = (latest && priorLatest)
-    ? Math.round(((latest - priorLatest) / priorLatest) * 100)
+  const delta = (deltaBase && priorLatest)
+    ? Math.round(((deltaBase - priorLatest) / priorLatest) * 100)
     : null;
 
   return { current, prior: priorRows, latest, delta };
@@ -381,14 +384,7 @@ function WaitChart({ park, allDailyRows, liveValue }) {
 
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
-
-  // today's daily avg from historical data
-  const todayStr = (() => {
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
-  })();
-  const todayRow = allDailyRows.find(r => r.park === park && r.date?.slice(0,10) === todayStr);
-  const todayAvg = todayRow?.avg_wait || null;
+  const todayAvg = liveValue?.today_avg || null;
 
   const scrapedAt = liveValue?.scraped_at
     ? (() => {
@@ -635,7 +631,7 @@ export default function App() {
     try {
       const rows = await fetch(`${API}/waits/latest`).then(r => r.json());
       const map = {};
-      rows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, scraped_at: r.scraped_at }; });
+      rows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, today_avg: r.today_avg, scraped_at: r.scraped_at }; });
       setLiveData(map);
     } catch (e) { console.error("live fetch failed", e); }
   }, []);
