@@ -54,11 +54,12 @@ async function loadStoredPosts() {
       subreddit: r.subreddit, score: r.score, url: r.url,
       park: r.park, sentiment: r.sentiment, summary: r.summary,
       kpis: r.kpis || [], kpi_details: r.kpi_details || {},
+      created_utc: r.created_utc || null,
       created: r.created_utc
         ? new Date(r.created_utc * 1000).toLocaleDateString()
         : new Date(r.saved_at).toLocaleDateString(),
       saved_at: r.saved_at,
-    }));
+    })).filter(p => p.park && p.park !== "null");
   } catch (e) { console.error("Failed to load stored posts:", e); return []; }
 }
 
@@ -436,7 +437,7 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
     .filter(p => selectedSentiment === "All" || p.sentiment === selectedSentiment)
     .sort((a, b) => sortBy === "points"
       ? (b.score || 0) - (a.score || 0)
-      : new Date(b.saved_at || b.created_utc * 1000) - new Date(a.saved_at || a.created_utc * 1000)
+      : (b.created_utc || 0) - (a.created_utc || 0)
     );
 
   return (
@@ -505,7 +506,9 @@ function RedditPanel({ posts, busy, status, selectedKPI, setSelectedKPI, selecte
                 {!p.summary && p.body && <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{p.body.slice(0, 200)}{p.body.length > 200 ? "…" : ""}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
-                <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap" }}>{p.park}</span>
+                {p.park && (
+                  <span style={{ fontSize: 11, background: "#fff7f3", color: ORANGE, padding: "2px 9px", borderRadius: 20, fontWeight: 600, whiteSpace: "nowrap" }}>{p.park}</span>
+                )}
                 {p.sentiment && (
                   <span style={{ fontSize: 11, background: SENTIMENT_BG[p.sentiment] || "#f9fafb", color: SENTIMENT[p.sentiment] || "#6b7280", padding: "2px 9px", borderRadius: 20, fontWeight: 600, textTransform: "capitalize" }}>{p.sentiment}</span>
                 )}
