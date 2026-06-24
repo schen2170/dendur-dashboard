@@ -140,12 +140,12 @@ function buildChartData(rows, days) {
   const pyCutoff = new Date(cutoff); pyCutoff.setFullYear(pyCutoff.getFullYear() - 1);
 
   const current = rows
-    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait > 0; })
+    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait >= 3; })
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(r => ({ date: r.date, v: r.avg_wait }));
 
   const prior = rows
-    .filter(r => { const d = parseLocalDate(r.date); return d >= pyCutoff && d <= pyToday && r.avg_wait > 0; })
+    .filter(r => { const d = parseLocalDate(r.date); return d >= pyCutoff && d <= pyToday && r.avg_wait >= 3; })
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(r => ({ date: r.date, v: r.avg_wait }));
 
@@ -586,14 +586,14 @@ export default function App() {
   const [sortBy, setSortBy]                       = useState("recent");
   const [activeTab, setActiveTab]                 = useState("reddit");
 
-  async function fetchLiveData() {
+  const fetchLiveData = useCallback(async () => {
     try {
       const rows = await fetch(`${API}/waits/latest`).then(r => r.json());
       const map = {};
       rows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, scraped_at: r.scraped_at }; });
       setLiveData(map);
     } catch (e) { console.error("live fetch failed", e); }
-  }
+  }, []);
 
   useEffect(() => {
     loadStoredPosts().then(p => { if (p.length) setPosts(p); });
@@ -602,7 +602,7 @@ export default function App() {
       .then(rows => { setAllDailyRows(rows); setDailyLoading(false); })
       .catch(() => setDailyLoading(false));
     fetchLiveData();
-  }, []);
+  }, [fetchLiveData]);
 
   const fetchPosts = useCallback(async () => {
     setLoading(true); setPosts([]); setStatus("Fetching Reddit posts…");
@@ -643,7 +643,7 @@ export default function App() {
     } catch (e) { console.error(e); }
     setLiveLoading(false);
     setStatus("");
-  }, []);
+  }, [fetchLiveData]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([fetchPosts(), refreshWaitTimes()]);
@@ -750,7 +750,7 @@ export default function App() {
               <WaitsPanel
                 parkFilter={selectedPark}
                 allDailyRows={allDailyRows}
-                dailyLoading={dailyLoading}
+                dailyLoading={dailyLoading || allDailyRows.length === 0}
                 liveData={liveData}
                 liveLoading={liveLoading}
                 onRefresh={refreshWaitTimes}
