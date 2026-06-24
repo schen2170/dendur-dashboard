@@ -689,30 +689,14 @@ export default function App() {
     setLiveLoading(true);
     setStatus("Scraping live wait times…");
     try {
-      const beforeRows = await fetch(`${API}/waits/latest`).then(r => r.json());
-      const beforeTime = beforeRows[0]?.scraped_at || null;
-      fetch(`${API}/scrape/live`).catch(() => {});
-      let attempts = 0;
-      while (attempts < 15) {
-        await new Promise(r => setTimeout(r, 8000));
-        const afterRows = await fetch(`${API}/waits/latest`).then(r => r.json());
-        const afterTime = afterRows[0]?.scraped_at || null;
-        if (afterTime && afterTime !== beforeTime) {
-          const map = {};
-          afterRows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, scraped_at: r.scraped_at }; });
-          setLiveData(map);
-          break;
-        }
-        attempts++;
-      }
+      await fetch(`${API}/scrape/live`);
+      await fetchLiveData();
       const rows = await fetch(`${API}/waits/daily`).then(r => r.json());
       setAllDailyRows(rows);
-      // fallback: if polling timed out, still fetch latest live data
-      await fetchLiveData();
     } catch (e) { console.error(e); }
     setLiveLoading(false);
     setStatus("");
-  }, [fetchLiveData, liveData]);
+  }, [fetchLiveData]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([fetchPosts(), refreshWaitTimes()]);
