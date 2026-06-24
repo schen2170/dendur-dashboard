@@ -54,7 +54,9 @@ async function loadStoredPosts() {
       subreddit: r.subreddit, score: r.score, url: r.url,
       park: r.park, sentiment: r.sentiment, summary: r.summary,
       kpis: r.kpis || [], kpi_details: r.kpi_details || {},
-      created: new Date(r.saved_at).toLocaleDateString(),
+      created: r.created_utc
+        ? new Date(r.created_utc * 1000).toLocaleDateString()
+        : new Date(r.saved_at).toLocaleDateString(),
       saved_at: r.saved_at,
     }));
   } catch (e) { console.error("Failed to load stored posts:", e); return []; }
@@ -358,7 +360,12 @@ function WaitChart({ park, allDailyRows, liveValue }) {
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
   const scrapedAt = liveValue?.scraped_at
-    ? new Date(liveValue.scraped_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    ? (() => {
+        const diff = Math.floor((Date.now() - new Date(liveValue.scraped_at).getTime()) / 60000);
+        if (diff < 1) return "just now";
+        if (diff < 60) return `${diff}m ago`;
+        return `${Math.floor(diff / 60)}h ago`;
+      })()
     : null;
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
@@ -633,17 +640,40 @@ export default function App() {
   }, []);
 
   const refreshWaitTimes = useCallback(async () => {
+    // cooldown — don't scrape if last scrape was less than 10 min ago
+    const lastScraped = Object.values(liveData)[0]?.scraped_at;
+    if (lastScraped) {
+      const minsAgo = (Date.now() - new Date(lastScraped).getTime()) / 60000;
+      if (minsAgo < 10) {
+        alert(`Last scrape was ${Math.round(minsAgo)} min ago. Wait a bit before refreshing.`);
+        return;
+      }
+    }
     setLiveLoading(true);
     setStatus("Scraping live wait times…");
     try {
-      await fetch(`${API}/scrape/live`);
-      await fetchLiveData();
+      const beforeRows = await fetch(`${API}/waits/latest`).then(r => r.json());
+      const beforeTime = beforeRows[0]?.scraped_at || null;
+      fetch(`${API}/scrape/live`).catch(() => {});
+      let attempts = 0;
+      while (attempts < 15) {
+        await new Promise(r => setTimeout(r, 8000));
+        const afterRows = await fetch(`${API}/waits/latest`).then(r => r.json());
+        const afterTime = afterRows[0]?.scraped_at || null;
+        if (afterTime && afterTime !== beforeTime) {
+          const map = {};
+          afterRows.forEach(r => { map[r.park] = { avg_wait: r.avg_wait, scraped_at: r.scraped_at }; });
+          setLiveData(map);
+          break;
+        }
+        attempts++;
+      }
       const rows = await fetch(`${API}/waits/daily`).then(r => r.json());
       setAllDailyRows(rows);
     } catch (e) { console.error(e); }
     setLiveLoading(false);
     setStatus("");
-  }, [fetchLiveData]);
+  }, [fetchLiveData, liveData]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([fetchPosts(), refreshWaitTimes()]);
