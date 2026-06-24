@@ -675,15 +675,6 @@ export default function App() {
   }, []);
 
   const refreshWaitTimes = useCallback(async () => {
-    // cooldown — don't scrape if last scrape was less than 10 min ago
-    const lastScraped = Object.values(liveData)[0]?.scraped_at;
-    if (lastScraped) {
-      const minsAgo = (Date.now() - new Date(lastScraped).getTime()) / 60000;
-      if (minsAgo < 10) {
-        alert(`Last scrape was ${Math.round(minsAgo)} min ago. Wait a bit before refreshing.`);
-        return;
-      }
-    }
     setLiveLoading(true);
     setStatus("Scraping live wait times…");
     try {
