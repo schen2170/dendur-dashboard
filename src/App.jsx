@@ -391,7 +391,7 @@ function WaitChart({ park, allDailyRows, liveValue }) {
       })()
     : null;
 
-  const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
+  const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? GREEN : "#dc2626";
   const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)} min vs last year`;
 
   return (
@@ -572,10 +572,18 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, liveData, liveLoad
       return (parkCounts[b] || 0) - (parkCounts[a] || 0);
     });
   const cpOrdered = PARKS.filter(p => !p.startsWith("Six Flags"));
-  // Cedar Point goes right after the last SF park with data, before no-data SF parks
   const sfWithData    = sfOrdered.filter(p => parksWithData.has(p));
   const sfWithoutData = sfOrdered.filter(p => !parksWithData.has(p));
-  const allOrdered = [...sfWithData, ...cpOrdered, ...sfWithoutData];
+
+  // insert Cedar Point right after Discovery Kingdom (last SF park before no-data parks)
+  const discoveryIdx = sfWithData.indexOf("Six Flags Discovery Kingdom");
+  const insertAt = discoveryIdx >= 0 ? discoveryIdx + 1 : sfWithData.length;
+  const allOrdered = [
+    ...sfWithData.slice(0, insertAt),
+    ...cpOrdered,
+    ...sfWithData.slice(insertAt),
+    ...sfWithoutData,
+  ];
 
   const parks = parkFilter === "All Parks"
     ? allOrdered
