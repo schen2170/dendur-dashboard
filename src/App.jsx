@@ -169,7 +169,7 @@ function buildChartData(rows, days, liveValue) {
   const latest     = current.length ? current[current.length - 1].v : null;
   const latestDate = current.length ? current[current.length - 1].date : null;
 
-  // delta: today's avg vs same date last year, shown as raw minute diff
+  // delta: today_avg from live scrape vs same date last year
   let priorSameDay = null;
   if (latestDate) {
     const targetT = parseLocalDate(latestDate);
@@ -179,9 +179,9 @@ function buildChartData(rows, days, liveValue) {
     if (close) priorSameDay = close.v;
   }
 
-  const compareBase = liveValue?.today_avg || latest;
-  const delta = (compareBase && priorSameDay)
-    ? compareBase - priorSameDay
+  // only show delta if we have today_avg from the scraper (not a fallback)
+  const delta = (liveValue?.today_avg && priorSameDay)
+    ? liveValue.today_avg - priorSameDay
     : null;
 
   return { current, prior: priorRows, latest, delta };
