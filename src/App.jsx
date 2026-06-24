@@ -148,12 +148,13 @@ function buildChartData(rows, days, liveValue) {
     .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait >= 3; })
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // inject today's live reading if not already in the data
+  // inject today's live reading only if no daily avg exists for today
   if (liveValue?.avg_wait && liveValue.avg_wait >= 3) {
     const alreadyHasToday = currentRows.some(r => r.date === todayStr);
     if (!alreadyHasToday) {
       currentRows = [...currentRows, { date: todayStr, avg_wait: liveValue.avg_wait }];
     }
+    // if daily avg exists for today, keep it (don't override with live)
   }
 
   currentRows = currentRows.map(r => ({ date: r.date, v: r.avg_wait }));
@@ -418,8 +419,10 @@ function WaitChart({ park, allDailyRows, liveValue }) {
               {displayValue !== null ? displayValue : "—"}
             </span>
             <span style={{ fontSize: 13, color: "#111827" }}>min live</span>
-            {todayAvg && todayAvg !== displayValue && (
-              <span style={{ fontSize: 12, color: "#6b7280" }}>· avg today {todayAvg} min</span>
+            {todayAvg && (
+              <span style={{ fontSize: 12, color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 6 }}>
+                avg {todayAvg} min
+              </span>
             )}
             {deltaText && <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>}
           </div>
