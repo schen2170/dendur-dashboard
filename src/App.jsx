@@ -370,11 +370,16 @@ function WaitChart({ park, allDailyRows, liveValue }) {
   // delta: today_avg vs Jun 24 last year — use full rows not range-filtered
   const delta = (() => {
     if (!liveValue?.today_avg) return null;
-    const today = new Date();
-    const target = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate()).getTime();
-    const close = rows.find(r => Math.abs(new Date(r.date).getTime() - target) <= 3 * 86400000);
-    if (!close) return null;
-    return liveValue.today_avg - close.avg_wait;
+    // find today's point in prior — same logic as tooltip hover
+    const todayD = new Date();
+    const targetT = new Date(todayD.getFullYear() - 1, todayD.getMonth(), todayD.getDate()).getTime();
+    const priorPt = prior.reduce((best, p) => {
+      const diff = Math.abs(parseLocalDate(p.date).getTime() - targetT);
+      if (diff <= 3 * 86400000 && (!best || diff < Math.abs(parseLocalDate(best.date).getTime() - targetT))) return p;
+      return best;
+    }, null);
+    if (!priorPt) return null;
+    return liveValue.today_avg - priorPt.v;
   })();
 
   const scrapedAt = liveValue?.scraped_at
