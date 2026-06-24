@@ -380,6 +380,15 @@ function WaitChart({ park, allDailyRows, liveValue }) {
 
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
+
+  // today's daily avg from historical data
+  const todayStr = (() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
+  })();
+  const todayRow = allDailyRows.find(r => r.park === park && r.date?.slice(0,10) === todayStr);
+  const todayAvg = todayRow?.avg_wait || null;
+
   const scrapedAt = liveValue?.scraped_at
     ? (() => {
         const diff = Math.floor((Date.now() - new Date(liveValue.scraped_at).getTime()) / 60000);
@@ -408,7 +417,10 @@ function WaitChart({ park, allDailyRows, liveValue }) {
             <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
               {displayValue !== null ? displayValue : "—"}
             </span>
-            <span style={{ fontSize: 13, color: "#111827" }}>min avg wait</span>
+            <span style={{ fontSize: 13, color: "#111827" }}>min live</span>
+            {todayAvg && todayAvg !== displayValue && (
+              <span style={{ fontSize: 12, color: "#6b7280" }}>· avg today {todayAvg} min</span>
+            )}
             {deltaText && <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>}
           </div>
         </div>
