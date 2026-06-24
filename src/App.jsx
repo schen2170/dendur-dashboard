@@ -272,11 +272,15 @@ function MiniChart({ current, prior, days }) {
     });
     if (nearest && minDist < 20) {
       const px = xOf(nearest.date, false);
-      const pd = parseLocalDate(nearest.date);
-      pd.setFullYear(pd.getFullYear() - 1);
-      const pyStr = `${pd.getFullYear()}-${String(pd.getMonth()+1).padStart(2,'0')}-${String(pd.getDate()).padStart(2,'0')}`;
-      const priorPt = prior.find(p => p.date === pyStr) || null;
-      setTooltip({ x: px, date: nearest.date, current: nearest.v, prior: priorPt?.v || null });
+      const targetT = parseLocalDate(nearest.date);
+      targetT.setFullYear(targetT.getFullYear() - 1);
+      const target = targetT.getTime();
+      const priorPt = prior.reduce((best, p) => {
+        const diff = Math.abs(parseLocalDate(p.date).getTime() - target);
+        if (diff <= 3 * 86400000 && (!best || diff < Math.abs(parseLocalDate(best.date).getTime() - target))) return p;
+        return best;
+      }, null);
+      setTooltip({ x: px, date: nearest.date, current: nearest.v, prior: priorPt?.v || null, priorDate: priorPt?.date || null });
     } else {
       setTooltip(null);
     }
@@ -308,7 +312,11 @@ function MiniChart({ current, prior, days }) {
         }}>
           <div style={{ fontWeight: 600, color: "#111827", marginBottom: 3 }}>{fmtDate(tooltip.date)}</div>
           <div style={{ color: GREEN }}>This year: {tooltip.current} min</div>
-          {tooltip.prior && <div style={{ color: "#9ca3af" }}>Prior year: {tooltip.prior} min</div>}
+          {tooltip.prior && (
+            <div style={{ color: "#9ca3af" }}>
+              {fmtDate(tooltip.priorDate)} (last year): {tooltip.prior} min
+            </div>
+          )}
         </div>
       )}
       <svg
