@@ -134,7 +134,7 @@ function todayLocal() {
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
 
-function buildChartData(rows, days) {
+function buildChartData(rows, days, liveValue) {
   if (!rows.length) return { current: [], prior: [], latest: null, delta: null };
 
   const today   = todayLocal();
@@ -142,26 +142,38 @@ function buildChartData(rows, days) {
   const pyToday  = new Date(today);  pyToday.setFullYear(pyToday.getFullYear() - 1);
   const pyCutoff = new Date(cutoff); pyCutoff.setFullYear(pyCutoff.getFullYear() - 1);
 
-  const current = rows
-    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait >= 3; })
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .map(r => ({ date: r.date, v: r.avg_wait }));
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
 
-  const prior = rows
+  let currentRows = rows
+    .filter(r => { const d = parseLocalDate(r.date); return d >= cutoff && d <= today && r.avg_wait >= 3; })
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // inject today's live reading if not already in the data
+  if (liveValue?.avg_wait && liveValue.avg_wait >= 3) {
+    const alreadyHasToday = currentRows.some(r => r.date === todayStr);
+    if (!alreadyHasToday) {
+      currentRows = [...currentRows, { date: todayStr, avg_wait: liveValue.avg_wait }];
+    }
+  }
+
+  currentRows = currentRows.map(r => ({ date: r.date, v: r.avg_wait }));
+
+  const priorRows = rows
     .filter(r => { const d = parseLocalDate(r.date); return d >= pyCutoff && d <= pyToday && r.avg_wait >= 3; })
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(r => ({ date: r.date, v: r.avg_wait }));
 
+  const current = currentRows;
+
   const latest      = current.length ? current[current.length - 1].v : null;
   const latestDate  = current.length ? current[current.length - 1].date : null;
 
-  // only compare if prior year has a reading within 3 days of the same date
   let priorLatest = null;
   if (latestDate) {
     const targetT = parseLocalDate(latestDate);
     targetT.setFullYear(targetT.getFullYear() - 1);
     const target = targetT.getTime();
-    const close = prior.find(p => Math.abs(parseLocalDate(p.date).getTime() - target) <= 3 * 86400000);
+    const close = priorRows.find(p => Math.abs(parseLocalDate(p.date).getTime() - target) <= 3 * 86400000);
     if (close) priorLatest = close.v;
   }
 
@@ -169,7 +181,7 @@ function buildChartData(rows, days) {
     ? Math.round(((latest - priorLatest) / priorLatest) * 100)
     : null;
 
-  return { current, prior, latest, delta };
+  return { current, prior: priorRows, latest, delta };
 }
 
 function fmtXLabel(dateStr, days) {
@@ -364,7 +376,7 @@ function WaitChart({ park, allDailyRows, liveValue }) {
   const [range, setRange] = useState(30);
 
   const rows = allDailyRows.filter(r => r.park === park);
-  const { current, prior, latest: historicalLatest, delta } = buildChartData(rows, range);
+  const { current, prior, latest: historicalLatest, delta } = buildChartData(rows, range, liveValue);
 
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
@@ -386,11 +398,6 @@ function WaitChart({ park, allDailyRows, liveValue }) {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
             <div style={{ fontSize: 13, color: "#111827", fontWeight: 600 }}>{park}</div>
-            {scrapedAt && (
-              <span style={{ fontSize: 10, color: GREEN, background: "#f0fdf4", padding: "2px 7px", borderRadius: 10, fontWeight: 600 }}>
-                ● Live {scrapedAt}
-              </span>
-            )}
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
