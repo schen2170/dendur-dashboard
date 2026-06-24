@@ -169,20 +169,19 @@ function buildChartData(rows, days, liveValue) {
   const latest     = current.length ? current[current.length - 1].v : null;
   const latestDate = current.length ? current[current.length - 1].date : null;
 
-  // for delta, prefer today_avg (true daily avg) over live current reading
-  const deltaBase = liveValue?.today_avg || latest;
-
-  let priorLatest = null;
+  // delta: today's avg vs same date last year, shown as raw minute diff
+  let priorSameDay = null;
   if (latestDate) {
     const targetT = parseLocalDate(latestDate);
     targetT.setFullYear(targetT.getFullYear() - 1);
     const target = targetT.getTime();
     const close = priorRows.find(p => Math.abs(parseLocalDate(p.date).getTime() - target) <= 3 * 86400000);
-    if (close) priorLatest = close.v;
+    if (close) priorSameDay = close.v;
   }
 
-  const delta = (deltaBase && priorLatest)
-    ? Math.round(((deltaBase - priorLatest) / priorLatest) * 100)
+  const compareBase = liveValue?.today_avg || latest;
+  const delta = (compareBase && priorSameDay)
+    ? compareBase - priorSameDay
     : null;
 
   return { current, prior: priorRows, latest, delta };
@@ -396,7 +395,7 @@ function WaitChart({ park, allDailyRows, liveValue }) {
     : null;
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
-  const deltaText  = displayValue === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
+  const deltaText  = delta === null ? "" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)} min vs last year`;
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #f3f4f6", padding: "1.25rem", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
@@ -569,9 +568,17 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, liveData, liveLoad
 
   const sfOrdered = PARKS
     .filter(p => p.startsWith("Six Flags"))
-    .sort((a, b) => (parkCounts[b] || 0) - (parkCounts[a] || 0));
+    .sort((a, b) => {
+      const aHas = parksWithData.has(a) ? 1 : 0;
+      const bHas = parksWithData.has(b) ? 1 : 0;
+      if (bHas !== aHas) return bHas - aHas; // data first
+      return (parkCounts[b] || 0) - (parkCounts[a] || 0);
+    });
   const cpOrdered = PARKS.filter(p => !p.startsWith("Six Flags"));
-  const allOrdered = [...sfOrdered, ...cpOrdered];
+  // Cedar Point goes right after the last SF park with data, before no-data SF parks
+  const sfWithData    = sfOrdered.filter(p => parksWithData.has(p));
+  const sfWithoutData = sfOrdered.filter(p => !parksWithData.has(p));
+  const allOrdered = [...sfWithData, ...cpOrdered, ...sfWithoutData];
 
   const parks = parkFilter === "All Parks"
     ? allOrdered
