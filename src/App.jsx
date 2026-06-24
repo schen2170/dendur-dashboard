@@ -380,6 +380,14 @@ function WaitChart({ park, allDailyRows, liveValue }) {
 
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
+  const scrapedAt = liveValue?.scraped_at
+    ? (() => {
+        const diff = Math.floor((Date.now() - new Date(liveValue.scraped_at).getTime()) / 60000);
+        if (diff < 1) return "just now";
+        if (diff < 60) return `${diff}m ago`;
+        return `${Math.floor(diff / 60)}h ago`;
+      })()
+    : null;
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
   const deltaText  = displayValue === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
@@ -390,6 +398,11 @@ function WaitChart({ park, allDailyRows, liveValue }) {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
             <div style={{ fontSize: 13, color: "#111827", fontWeight: 600 }}>{park}</div>
+            {scrapedAt && (
+              <span style={{ fontSize: 10, color: GREEN, background: "#f0fdf4", padding: "2px 7px", borderRadius: 10, fontWeight: 600 }}>
+                ● Live {scrapedAt}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
             <span style={{ fontSize: 32, fontWeight: 700, color: "#111827", lineHeight: 1 }}>
