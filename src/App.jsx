@@ -537,14 +537,14 @@ function WaitsPanel({ parkFilter, allDailyRows, dailyLoading, liveData, liveLoad
   const parksWithData = new Set(allDailyRows.map(r => r.park));
 
   const sfOrdered = PARKS
-    .filter(p => p.startsWith("Six Flags") && parksWithData.has(p))
+    .filter(p => p.startsWith("Six Flags"))
     .sort((a, b) => (parkCounts[b] || 0) - (parkCounts[a] || 0));
-  const cpOrdered = PARKS.filter(p => !p.startsWith("Six Flags") && parksWithData.has(p));
+  const cpOrdered = PARKS.filter(p => !p.startsWith("Six Flags"));
   const allOrdered = [...sfOrdered, ...cpOrdered];
 
   const parks = parkFilter === "All Parks"
     ? allOrdered
-    : [parkFilter].filter(p => parksWithData.has(p));
+    : [parkFilter];
 
   if (dailyLoading) return (
     <div style={{ textAlign: "center", padding: "4rem", color: "#9ca3af" }}>
