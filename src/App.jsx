@@ -165,26 +165,9 @@ function buildChartData(rows, days, liveValue) {
     .map(r => ({ date: r.date, v: r.avg_wait }));
 
   const current = currentRows;
+  const latest  = current.length ? current[current.length - 1].v : null;
 
-  const latest     = current.length ? current[current.length - 1].v : null;
-  const latestDate = current.length ? current[current.length - 1].date : null;
-
-  // delta: today_avg from live scrape vs same date last year
-  let priorSameDay = null;
-  if (latestDate) {
-    const targetT = parseLocalDate(latestDate);
-    targetT.setFullYear(targetT.getFullYear() - 1);
-    const target = targetT.getTime();
-    const close = priorRows.find(p => Math.abs(parseLocalDate(p.date).getTime() - target) <= 3 * 86400000);
-    if (close) priorSameDay = close.v;
-  }
-
-  // only show delta if we have today_avg from the scraper (not a fallback)
-  const delta = (liveValue?.today_avg && priorSameDay)
-    ? liveValue.today_avg - priorSameDay
-    : null;
-
-  return { current, prior: priorRows, latest, delta };
+  return { current, prior: priorRows, latest };
 }
 
 function fmtXLabel(dateStr, days) {
@@ -379,11 +362,20 @@ function WaitChart({ park, allDailyRows, liveValue }) {
   const [range, setRange] = useState(30);
 
   const rows = allDailyRows.filter(r => r.park === park);
-  const { current, prior, latest: historicalLatest, delta } = buildChartData(rows, range, liveValue);
+  const { current, prior, latest: historicalLatest } = buildChartData(rows, range, liveValue);
 
-  // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
   const todayAvg = liveValue?.today_avg || null;
+
+  // delta: today_avg vs Jun 24 last year — use full rows not range-filtered
+  const delta = (() => {
+    if (!liveValue?.today_avg) return null;
+    const today = new Date();
+    const target = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate()).getTime();
+    const close = rows.find(r => Math.abs(new Date(r.date).getTime() - target) <= 3 * 86400000);
+    if (!close) return null;
+    return liveValue.today_avg - close.avg_wait;
+  })();
 
   const scrapedAt = liveValue?.scraped_at
     ? (() => {
