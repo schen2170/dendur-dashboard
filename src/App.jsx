@@ -380,14 +380,6 @@ function WaitChart({ park, allDailyRows, liveValue }) {
 
   // prefer live value for the displayed number
   const displayValue = liveValue?.avg_wait ?? historicalLatest;
-  const scrapedAt = liveValue?.scraped_at
-    ? (() => {
-        const diff = Math.floor((Date.now() - new Date(liveValue.scraped_at).getTime()) / 60000);
-        if (diff < 1) return "just now";
-        if (diff < 60) return `${diff}m ago`;
-        return `${Math.floor(diff / 60)}h ago`;
-      })()
-    : null;
 
   const deltaColor = delta === null ? "#9ca3af" : delta > 0 ? "#dc2626" : GREEN;
   const deltaText  = displayValue === null ? "" : delta === null ? "N/A vs prior year" : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}% vs prior year`;
@@ -688,6 +680,8 @@ export default function App() {
       }
       const rows = await fetch(`${API}/waits/daily`).then(r => r.json());
       setAllDailyRows(rows);
+      // fallback: if polling timed out, still fetch latest live data
+      await fetchLiveData();
     } catch (e) { console.error(e); }
     setLiveLoading(false);
     setStatus("");
@@ -798,7 +792,7 @@ export default function App() {
               <WaitsPanel
                 parkFilter={selectedPark}
                 allDailyRows={allDailyRows}
-                dailyLoading={dailyLoading || allDailyRows.length === 0}
+                dailyLoading={dailyLoading}
                 liveData={liveData}
                 liveLoading={liveLoading}
                 onRefresh={refreshWaitTimes}
